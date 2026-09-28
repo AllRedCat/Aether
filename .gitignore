@@ -1,0 +1,65 @@
+# =========================
+# MACOS / GERAL
+# =========================
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# =========================
+# RUST / CARGO
+# =========================
+# Bloqueia a pasta pesada de compilação do Rust
+target/
+**/*.rs.bk
+
+# =========================
+# FLUTTER / DART
+# =========================
+# Bloqueia as pastas de build do Flutter
+**/build/
+**/.dart_tool/
+.packages
+.pub-cache/
+.pub/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+
+# =========================
+# IOS / MACOS (XCODE & PODS)
+# =========================
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/app.flx
+**/ios/Flutter/app.zip
+**/ios/Flutter/flutter_assets/
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.*
+
+**/macos/Pods/
+**/macos/Flutter/ephemeral/
+**/macos/Flutter/GeneratedPluginRegistrant.swift
+
+# =========================
+# ANDROID
+# =========================
+**/android/app/build/
+**/android/build/
+**/android/.gradle/
+**/android/local.properties
+**/android/*.iml
+**/android/app/src/main/gen/
+**/.idea/
+**/.vscode/
+
+# =========================
+# AETHER (Gerados do FRB)
+# =========================
+# (Opcional) Você pode querer commitar o código gerado do FFI, 
+# mas se quiser ignorar logs:
+*.log

@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "crates/aether_bridge",
+    "crates/aether_core",
+    "crates/aether_render",
+    "crates/aether_media"
+]
+resolver = "2"

@@ -1,0 +1,27 @@
+name: aether_app
+description: "A cross-platform NLE video editor using Flutter and Rust."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_rust_bridge: 2.3.0
+  flutter_riverpod: ^2.5.1
+  riverpod: ^2.5.1
+  uuid: ^4.4.0
+  rust_lib_aether_app:
+    path: rust_builder
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  integration_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
