@@ -4,6 +4,9 @@ import 'src/bridge/api.dart';
 import 'src/bridge/frb_generated.dart';
 import 'src/features/timeline/timeline_view.dart';
 
+import 'src/theme/catppuccin.dart';
+import 'src/features/welcome/welcome_screen.dart';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
@@ -22,24 +25,9 @@ class AetherApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Aether Video Editor',
-      theme: ThemeData.dark(useMaterial3: true),
-      home: const Scaffold(
-        body: SafeArea(
-          child: Column(
-            children: [
-              Expanded(
-                flex: 2,
-                child: Center(child: Text("Preview Area")),
-              ),
-              Divider(height: 1),
-              Expanded(
-                flex: 1,
-                child: TimelineView(),
-              ),
-            ],
-          ),
-        ),
-      ),
+      debugShowCheckedModeBanner: false,
+      theme: aetherTheme,
+      home: const WelcomeScreen(),
     );
   }
 }
