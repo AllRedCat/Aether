@@ -25,19 +25,37 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int dco_decode_CastedPrimitive_i_64(dynamic raw);
 
   @protected
+  int dco_decode_CastedPrimitive_u_64(dynamic raw);
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
   UuidValue dco_decode_Uuid(dynamic raw);
 
   @protected
+  MediaItem dco_decode_box_autoadd_media_item(dynamic raw);
+
+  @protected
   Project dco_decode_box_autoadd_project(dynamic raw);
+
+  @protected
+  Rational dco_decode_box_autoadd_rational(dynamic raw);
 
   @protected
   Timeline dco_decode_box_autoadd_timeline(dynamic raw);
 
   @protected
+  int dco_decode_box_autoadd_u_16(dynamic raw);
+
+  @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
   Clip dco_decode_clip(dynamic raw);
+
+  @protected
+  double dco_decode_f_64(dynamic raw);
 
   @protected
   int dco_decode_i_32(dynamic raw);
@@ -49,10 +67,40 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<Clip> dco_decode_list_clip(dynamic raw);
 
   @protected
+  List<MediaItem> dco_decode_list_media_item(dynamic raw);
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
   List<Track> dco_decode_list_track(dynamic raw);
+
+  @protected
+  MediaItem dco_decode_media_item(dynamic raw);
+
+  @protected
+  MediaMetadata dco_decode_media_metadata(dynamic raw);
+
+  @protected
+  MediaPool dco_decode_media_pool(dynamic raw);
+
+  @protected
+  MediaType dco_decode_media_type(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_CastedPrimitive_i_64(dynamic raw);
+
+  @protected
+  String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  Rational? dco_decode_opt_box_autoadd_rational(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_16(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
 
   @protected
   Project dco_decode_project(dynamic raw);
@@ -70,6 +118,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   TrackKind dco_decode_track_kind(dynamic raw);
 
   @protected
+  int dco_decode_u_16(dynamic raw);
+
+  @protected
+  int dco_decode_u_32(dynamic raw);
+
+  @protected
+  BigInt dco_decode_u_64(dynamic raw);
+
+  @protected
   int dco_decode_u_8(dynamic raw);
 
   @protected
@@ -79,19 +136,37 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int sse_decode_CastedPrimitive_i_64(SseDeserializer deserializer);
 
   @protected
+  int sse_decode_CastedPrimitive_u_64(SseDeserializer deserializer);
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
   UuidValue sse_decode_Uuid(SseDeserializer deserializer);
 
   @protected
+  MediaItem sse_decode_box_autoadd_media_item(SseDeserializer deserializer);
+
+  @protected
   Project sse_decode_box_autoadd_project(SseDeserializer deserializer);
+
+  @protected
+  Rational sse_decode_box_autoadd_rational(SseDeserializer deserializer);
 
   @protected
   Timeline sse_decode_box_autoadd_timeline(SseDeserializer deserializer);
 
   @protected
+  int sse_decode_box_autoadd_u_16(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   Clip sse_decode_clip(SseDeserializer deserializer);
+
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
@@ -103,10 +178,40 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<Clip> sse_decode_list_clip(SseDeserializer deserializer);
 
   @protected
+  List<MediaItem> sse_decode_list_media_item(SseDeserializer deserializer);
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
   List<Track> sse_decode_list_track(SseDeserializer deserializer);
+
+  @protected
+  MediaItem sse_decode_media_item(SseDeserializer deserializer);
+
+  @protected
+  MediaMetadata sse_decode_media_metadata(SseDeserializer deserializer);
+
+  @protected
+  MediaPool sse_decode_media_pool(SseDeserializer deserializer);
+
+  @protected
+  MediaType sse_decode_media_type(SseDeserializer deserializer);
+
+  @protected
+  int? sse_decode_opt_CastedPrimitive_i_64(SseDeserializer deserializer);
+
+  @protected
+  String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  Rational? sse_decode_opt_box_autoadd_rational(SseDeserializer deserializer);
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_16(SseDeserializer deserializer);
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
   Project sse_decode_project(SseDeserializer deserializer);
@@ -124,6 +229,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   TrackKind sse_decode_track_kind(SseDeserializer deserializer);
 
   @protected
+  int sse_decode_u_16(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer);
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_u_8(SseDeserializer deserializer);
 
   @protected
@@ -136,19 +250,38 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_CastedPrimitive_i_64(int self, SseSerializer serializer);
 
   @protected
+  void sse_encode_CastedPrimitive_u_64(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
   void sse_encode_Uuid(UuidValue self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_media_item(
+      MediaItem self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_project(Project self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_rational(Rational self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_timeline(Timeline self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_u_16(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_clip(Clip self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer);
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
@@ -160,11 +293,43 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_list_clip(List<Clip> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_media_item(
+      List<MediaItem> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
       Uint8List self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_track(List<Track> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_media_item(MediaItem self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_media_metadata(MediaMetadata self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_media_pool(MediaPool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_media_type(MediaType self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_CastedPrimitive_i_64(int? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_rational(
+      Rational? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_16(int? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
 
   @protected
   void sse_encode_project(Project self, SseSerializer serializer);
@@ -180,6 +345,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_track_kind(TrackKind self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_16(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_8(int self, SseSerializer serializer);

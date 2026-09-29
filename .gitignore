@@ -63,3 +63,4 @@ target/
 # (Opcional) Você pode querer commitar o código gerado do FFI, 
 # mas se quiser ignorar logs:
 *.log
+.agents/
