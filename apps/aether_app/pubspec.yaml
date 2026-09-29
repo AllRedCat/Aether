@@ -15,6 +15,8 @@ dependencies:
   uuid: ^4.4.0
   rust_lib_aether_app:
     path: rust_builder
+  path_provider: ^2.1.6
+  file_selector: ^1.1.0
 
 dev_dependencies:
   flutter_test:

@@ -9,6 +9,16 @@ import 'package:uuid/uuid.dart';
 
 Future<void> initEngine() => RustLib.instance.api.crateApiInitEngine();
 
+Future<Project> createProject(
+        {required String name, required String baseDir}) =>
+    RustLib.instance.api.crateApiCreateProject(name: name, baseDir: baseDir);
+
+Future<Project> loadProject({required String filePath}) =>
+    RustLib.instance.api.crateApiLoadProject(filePath: filePath);
+
+Future<void> saveProject({required Project project}) =>
+    RustLib.instance.api.crateApiSaveProject(project: project);
+
 Future<Timeline> createTimeline() =>
     RustLib.instance.api.crateApiCreateTimeline();
 
@@ -20,9 +30,9 @@ Future<Timeline> addClipToTrack(
         {required Timeline timeline,
         required UuidValue trackId,
         required UuidValue sourceId,
-        required PlatformInt64 sourceIn,
-        required PlatformInt64 sourceOut,
-        required PlatformInt64 timelineIn}) =>
+        required int sourceIn,
+        required int sourceOut,
+        required int timelineIn}) =>
     RustLib.instance.api.crateApiAddClipToTrack(
         timeline: timeline,
         trackId: trackId,
@@ -34,10 +44,10 @@ Future<Timeline> addClipToTrack(
 class Clip {
   final UuidValue id;
   final UuidValue sourceId;
-  final PlatformInt64 sourceIn;
-  final PlatformInt64 sourceOut;
-  final PlatformInt64 timelineIn;
-  final PlatformInt64 timelineOut;
+  final int sourceIn;
+  final int sourceOut;
+  final int timelineIn;
+  final int timelineOut;
 
   const Clip({
     required this.id,
@@ -70,6 +80,41 @@ class Clip {
           timelineOut == other.timelineOut;
 }
 
+class Project {
+  final String id;
+  final String name;
+  final String projectPath;
+  final String filePath;
+  final Timeline timeline;
+
+  const Project({
+    required this.id,
+    required this.name,
+    required this.projectPath,
+    required this.filePath,
+    required this.timeline,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      projectPath.hashCode ^
+      filePath.hashCode ^
+      timeline.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Project &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          projectPath == other.projectPath &&
+          filePath == other.filePath &&
+          timeline == other.timeline;
+}
+
 class Rational {
   final int num;
   final int den;
@@ -94,7 +139,7 @@ class Rational {
 class Timeline {
   final UuidValue id;
   final Rational timebase;
-  final PlatformInt64 durationPts;
+  final int durationPts;
   final List<Track> tracks;
 
   const Timeline({

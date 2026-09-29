@@ -22,10 +22,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   });
 
   @protected
+  int dco_decode_CastedPrimitive_i_64(dynamic raw);
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
   UuidValue dco_decode_Uuid(dynamic raw);
+
+  @protected
+  Project dco_decode_box_autoadd_project(dynamic raw);
 
   @protected
   Timeline dco_decode_box_autoadd_timeline(dynamic raw);
@@ -49,6 +55,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<Track> dco_decode_list_track(dynamic raw);
 
   @protected
+  Project dco_decode_project(dynamic raw);
+
+  @protected
   Rational dco_decode_rational(dynamic raw);
 
   @protected
@@ -67,10 +76,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void dco_decode_unit(dynamic raw);
 
   @protected
+  int sse_decode_CastedPrimitive_i_64(SseDeserializer deserializer);
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
   UuidValue sse_decode_Uuid(SseDeserializer deserializer);
+
+  @protected
+  Project sse_decode_box_autoadd_project(SseDeserializer deserializer);
 
   @protected
   Timeline sse_decode_box_autoadd_timeline(SseDeserializer deserializer);
@@ -94,6 +109,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<Track> sse_decode_list_track(SseDeserializer deserializer);
 
   @protected
+  Project sse_decode_project(SseDeserializer deserializer);
+
+  @protected
   Rational sse_decode_rational(SseDeserializer deserializer);
 
   @protected
@@ -115,10 +133,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  void sse_encode_CastedPrimitive_i_64(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
   void sse_encode_Uuid(UuidValue self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_project(Project self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_timeline(Timeline self, SseSerializer serializer);
@@ -141,6 +165,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_track(List<Track> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_project(Project self, SseSerializer serializer);
 
   @protected
   void sse_encode_rational(Rational self, SseSerializer serializer);

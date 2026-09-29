@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.3.0';
 
   @override
-  int get rustContentHash => 1588514023;
+  int get rustContentHash => -2067963356;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -82,16 +82,23 @@ abstract class RustLibApi extends BaseApi {
       {required Timeline timeline,
       required UuidValue trackId,
       required UuidValue sourceId,
-      required PlatformInt64 sourceIn,
-      required PlatformInt64 sourceOut,
-      required PlatformInt64 timelineIn});
+      required int sourceIn,
+      required int sourceOut,
+      required int timelineIn});
 
   Future<Timeline> crateApiAddTrack(
       {required Timeline timeline, required TrackKind kind});
 
+  Future<Project> crateApiCreateProject(
+      {required String name, required String baseDir});
+
   Future<Timeline> crateApiCreateTimeline();
 
   Future<void> crateApiInitEngine();
+
+  Future<Project> crateApiLoadProject({required String filePath});
+
+  Future<void> crateApiSaveProject({required Project project});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -107,18 +114,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       {required Timeline timeline,
       required UuidValue trackId,
       required UuidValue sourceId,
-      required PlatformInt64 sourceIn,
-      required PlatformInt64 sourceOut,
-      required PlatformInt64 timelineIn}) {
+      required int sourceIn,
+      required int sourceOut,
+      required int timelineIn}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_timeline(timeline, serializer);
         sse_encode_Uuid(trackId, serializer);
         sse_encode_Uuid(sourceId, serializer);
-        sse_encode_i_64(sourceIn, serializer);
-        sse_encode_i_64(sourceOut, serializer);
-        sse_encode_i_64(timelineIn, serializer);
+        sse_encode_CastedPrimitive_i_64(sourceIn, serializer);
+        sse_encode_CastedPrimitive_i_64(sourceOut, serializer);
+        sse_encode_CastedPrimitive_i_64(timelineIn, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 1, port: port_);
       },
@@ -171,12 +178,38 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<Project> crateApiCreateProject(
+      {required String name, required String baseDir}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(name, serializer);
+        sse_encode_String(baseDir, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 3, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_project,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiCreateProjectConstMeta,
+      argValues: [name, baseDir],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiCreateProjectConstMeta => const TaskConstMeta(
+        debugName: "create_project",
+        argNames: ["name", "baseDir"],
+      );
+
+  @override
   Future<Timeline> crateApiCreateTimeline() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 3, port: port_);
+            funcId: 4, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_timeline,
@@ -199,7 +232,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 4, port: port_);
+            funcId: 5, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -216,6 +249,61 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         argNames: [],
       );
 
+  @override
+  Future<Project> crateApiLoadProject({required String filePath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(filePath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 6, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_project,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiLoadProjectConstMeta,
+      argValues: [filePath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiLoadProjectConstMeta => const TaskConstMeta(
+        debugName: "load_project",
+        argNames: ["filePath"],
+      );
+
+  @override
+  Future<void> crateApiSaveProject({required Project project}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_box_autoadd_project(project, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 7, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSaveProjectConstMeta,
+      argValues: [project],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSaveProjectConstMeta => const TaskConstMeta(
+        debugName: "save_project",
+        argNames: ["project"],
+      );
+
+  @protected
+  int dco_decode_CastedPrimitive_i_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError(
+        'Not implemented in this codec, please use the other one');
+  }
+
   @protected
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -226,6 +314,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   UuidValue dco_decode_Uuid(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return UuidValue.fromByteList(dco_decode_list_prim_u_8_strict(raw));
+  }
+
+  @protected
+  Project dco_decode_box_autoadd_project(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_project(raw);
   }
 
   @protected
@@ -243,10 +337,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return Clip(
       id: dco_decode_Uuid(arr[0]),
       sourceId: dco_decode_Uuid(arr[1]),
-      sourceIn: dco_decode_i_64(arr[2]),
-      sourceOut: dco_decode_i_64(arr[3]),
-      timelineIn: dco_decode_i_64(arr[4]),
-      timelineOut: dco_decode_i_64(arr[5]),
+      sourceIn: dco_decode_CastedPrimitive_i_64(arr[2]),
+      sourceOut: dco_decode_CastedPrimitive_i_64(arr[3]),
+      timelineIn: dco_decode_CastedPrimitive_i_64(arr[4]),
+      timelineOut: dco_decode_CastedPrimitive_i_64(arr[5]),
     );
   }
 
@@ -281,6 +375,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  Project dco_decode_project(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return Project(
+      id: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      projectPath: dco_decode_String(arr[2]),
+      filePath: dco_decode_String(arr[3]),
+      timeline: dco_decode_timeline(arr[4]),
+    );
+  }
+
+  @protected
   Rational dco_decode_rational(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -301,7 +410,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return Timeline(
       id: dco_decode_Uuid(arr[0]),
       timebase: dco_decode_rational(arr[1]),
-      durationPts: dco_decode_i_64(arr[2]),
+      durationPts: dco_decode_CastedPrimitive_i_64(arr[2]),
       tracks: dco_decode_list_track(arr[3]),
     );
   }
@@ -338,6 +447,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int sse_decode_CastedPrimitive_i_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_64(deserializer);
+    return inner.toInt();
+  }
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_list_prim_u_8_strict(deserializer);
@@ -352,6 +468,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  Project sse_decode_box_autoadd_project(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_project(deserializer));
+  }
+
+  @protected
   Timeline sse_decode_box_autoadd_timeline(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_timeline(deserializer));
@@ -362,10 +484,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_Uuid(deserializer);
     var var_sourceId = sse_decode_Uuid(deserializer);
-    var var_sourceIn = sse_decode_i_64(deserializer);
-    var var_sourceOut = sse_decode_i_64(deserializer);
-    var var_timelineIn = sse_decode_i_64(deserializer);
-    var var_timelineOut = sse_decode_i_64(deserializer);
+    var var_sourceIn = sse_decode_CastedPrimitive_i_64(deserializer);
+    var var_sourceOut = sse_decode_CastedPrimitive_i_64(deserializer);
+    var var_timelineIn = sse_decode_CastedPrimitive_i_64(deserializer);
+    var var_timelineOut = sse_decode_CastedPrimitive_i_64(deserializer);
     return Clip(
         id: var_id,
         sourceId: var_sourceId,
@@ -419,6 +541,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  Project sse_decode_project(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_projectPath = sse_decode_String(deserializer);
+    var var_filePath = sse_decode_String(deserializer);
+    var var_timeline = sse_decode_timeline(deserializer);
+    return Project(
+        id: var_id,
+        name: var_name,
+        projectPath: var_projectPath,
+        filePath: var_filePath,
+        timeline: var_timeline);
+  }
+
+  @protected
   Rational sse_decode_rational(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_num = sse_decode_i_32(deserializer);
@@ -431,7 +569,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_Uuid(deserializer);
     var var_timebase = sse_decode_rational(deserializer);
-    var var_durationPts = sse_decode_i_64(deserializer);
+    var var_durationPts = sse_decode_CastedPrimitive_i_64(deserializer);
     var var_tracks = sse_decode_list_track(deserializer);
     return Timeline(
         id: var_id,
@@ -474,6 +612,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_CastedPrimitive_i_64(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_64(sseEncodeCastedPrimitiveI64(self), serializer);
+  }
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer);
@@ -483,6 +627,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_Uuid(UuidValue self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(self.toBytes(), serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_project(Project self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_project(self, serializer);
   }
 
   @protected
@@ -497,10 +647,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_Uuid(self.id, serializer);
     sse_encode_Uuid(self.sourceId, serializer);
-    sse_encode_i_64(self.sourceIn, serializer);
-    sse_encode_i_64(self.sourceOut, serializer);
-    sse_encode_i_64(self.timelineIn, serializer);
-    sse_encode_i_64(self.timelineOut, serializer);
+    sse_encode_CastedPrimitive_i_64(self.sourceIn, serializer);
+    sse_encode_CastedPrimitive_i_64(self.sourceOut, serializer);
+    sse_encode_CastedPrimitive_i_64(self.timelineIn, serializer);
+    sse_encode_CastedPrimitive_i_64(self.timelineOut, serializer);
   }
 
   @protected
@@ -542,6 +692,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_project(Project self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.projectPath, serializer);
+    sse_encode_String(self.filePath, serializer);
+    sse_encode_timeline(self.timeline, serializer);
+  }
+
+  @protected
   void sse_encode_rational(Rational self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.num, serializer);
@@ -553,7 +713,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_Uuid(self.id, serializer);
     sse_encode_rational(self.timebase, serializer);
-    sse_encode_i_64(self.durationPts, serializer);
+    sse_encode_CastedPrimitive_i_64(self.durationPts, serializer);
     sse_encode_list_track(self.tracks, serializer);
   }
 

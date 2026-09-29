@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:file_selector/file_selector.dart';
 import '../../theme/catppuccin.dart';
+import '../../bridge/api.dart';
 import '../editor/editor_screen.dart';
 
 class WelcomeScreen extends StatelessWidget {
@@ -136,10 +138,7 @@ class WelcomeScreen extends StatelessWidget {
                       title: "Novo Projeto",
                       subtitle: "Criar uma nova timeline de edição em branco",
                       color: CatppuccinMocha.mauve,
-                      onTap: () {
-                        // Navega para a timeline fake que já temos
-          Navigator.push(context, MaterialPageRoute(builder: (_) => const EditorScreen()));
-                      },
+                      onTap: () => _handleNewProject(context),
                     ),
                     const SizedBox(height: 16),
                     _buildActionButton(
@@ -260,5 +259,88 @@ class WelcomeScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+  Future<void> _handleNewProject(BuildContext context) async {
+    // 1. Pede o nome do projeto usando um modal
+    final TextEditingController nameController = TextEditingController();
+    final String? projectName = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: CatppuccinMocha.base,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('Novo Projeto', style: TextStyle(color: CatppuccinMocha.text)),
+          content: TextField(
+            controller: nameController,
+            autofocus: true,
+            style: const TextStyle(color: CatppuccinMocha.text),
+            decoration: InputDecoration(
+              hintText: "Ex: Casamento na Praia",
+              hintStyle: const TextStyle(color: CatppuccinMocha.subtext0),
+              filled: true,
+              fillColor: CatppuccinMocha.surface0,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+            ),
+            onSubmitted: (value) {
+              if (value.trim().isNotEmpty) {
+                Navigator.pop(dialogContext, value.trim());
+              }
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancelar', style: TextStyle(color: CatppuccinMocha.subtext0)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: CatppuccinMocha.mauve, foregroundColor: CatppuccinMocha.base),
+              onPressed: () {
+                if (nameController.text.trim().isNotEmpty) {
+                  Navigator.pop(dialogContext, nameController.text.trim());
+                }
+              },
+              child: const Text('Continuar'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (projectName == null || !context.mounted) return;
+
+    // 2. Abre o seletor de pasta NATIVO do sistema operacional
+    final String? selectedDirectory = await getDirectoryPath(
+      confirmButtonText: 'Criar Projeto Aqui',
+    );
+
+    if (selectedDirectory == null || !context.mounted) return; // Cancelou
+
+    try {
+      // 3. Chama o motor Rust para criar o projeto no destino escolhido
+      final project = await createProject(
+        name: projectName,
+        baseDir: selectedDirectory,
+      );
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: CatppuccinMocha.green,
+            content: Text(
+              'Projeto "$projectName" criado em: ${project.projectPath}',
+              style: const TextStyle(color: CatppuccinMocha.crust),
+            ),
+          ),
+        );
+        // 4. Vai para a Workspace de edição
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const EditorScreen()));
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: CatppuccinMocha.red, content: Text('Erro ao criar projeto: $e')),
+        );
+      }
+    }
   }
 }

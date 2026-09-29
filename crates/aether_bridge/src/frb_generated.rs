@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.3.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1588514023;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -2067963356;
 
 // Section: executor
 
@@ -125,6 +125,40 @@ fn wire__crate__api__add_track_impl(
         },
     )
 }
+fn wire__crate__api__create_project_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "create_project",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_name = <String>::sse_decode(&mut deserializer);
+            let api_base_dir = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::create_project(api_name, api_base_dir)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__create_timeline_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -191,6 +225,72 @@ fn wire__crate__api__init_engine_impl(
         },
     )
 }
+fn wire__crate__api__load_project_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "load_project",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_file_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::load_project(api_file_path)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__save_project_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "save_project",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_project = <crate::api::Project>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::save_project(api_project)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 
 // Section: static_checks
 
@@ -204,6 +304,14 @@ const _: fn() = || {
         let _: i64 = Clip.source_out;
         let _: i64 = Clip.timeline_in;
         let _: i64 = Clip.timeline_out;
+    }
+    {
+        let Project = None::<crate::api::Project>.unwrap();
+        let _: String = Project.id;
+        let _: String = Project.name;
+        let _: String = Project.project_path;
+        let _: String = Project.file_path;
+        let _: crate::api::Timeline = Project.timeline;
     }
     {
         let Rational = None::<crate::api::Rational>.unwrap();
@@ -313,6 +421,24 @@ impl SseDecode for Vec<crate::api::Track> {
     }
 }
 
+impl SseDecode for crate::api::Project {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_projectPath = <String>::sse_decode(deserializer);
+        let mut var_filePath = <String>::sse_decode(deserializer);
+        let mut var_timeline = <crate::api::Timeline>::sse_decode(deserializer);
+        return crate::api::Project {
+            id: var_id,
+            name: var_name,
+            project_path: var_projectPath,
+            file_path: var_filePath,
+            timeline: var_timeline,
+        };
+    }
+}
+
 impl SseDecode for crate::api::Rational {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -398,8 +524,11 @@ fn pde_ffi_dispatcher_primary_impl(
     match func_id {
         1 => wire__crate__api__add_clip_to_track_impl(port, ptr, rust_vec_len, data_len),
         2 => wire__crate__api__add_track_impl(port, ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__create_timeline_impl(port, ptr, rust_vec_len, data_len),
-        4 => wire__crate__api__init_engine_impl(port, ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__create_project_impl(port, ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__create_timeline_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__init_engine_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__load_project_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__save_project_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -435,6 +564,28 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::Clip> {
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for FrbWrapper<crate::api::Clip> {}
 impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::Clip>> for crate::api::Clip {
     fn into_into_dart(self) -> FrbWrapper<crate::api::Clip> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::Project> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.id.into_into_dart().into_dart(),
+            self.0.name.into_into_dart().into_dart(),
+            self.0.project_path.into_into_dart().into_dart(),
+            self.0.file_path.into_into_dart().into_dart(),
+            self.0.timeline.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::Project>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::Project>> for crate::api::Project {
+    fn into_into_dart(self) -> FrbWrapper<crate::api::Project> {
         self.into()
     }
 }
@@ -585,6 +736,17 @@ impl SseEncode for Vec<crate::api::Track> {
         for item in self {
             <crate::api::Track>::sse_encode(item, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::Project {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.project_path, serializer);
+        <String>::sse_encode(self.file_path, serializer);
+        <crate::api::Timeline>::sse_encode(self.timeline, serializer);
     }
 }
 

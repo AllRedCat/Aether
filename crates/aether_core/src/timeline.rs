@@ -1,19 +1,19 @@
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rational {
     pub num: i32,
     pub den: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackKind {
     Video,
     Audio,
     Overlay,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Clip {
     pub id: Uuid,
     pub source_id: Uuid,
@@ -23,14 +23,14 @@ pub struct Clip {
     pub timeline_out: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Track {
     pub id: Uuid,
     pub kind: TrackKind,
     pub clips: Vec<Clip>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Timeline {
     pub id: Uuid,
     pub timebase: Rational,
@@ -38,7 +38,7 @@ pub struct Timeline {
     pub tracks: Vec<Track>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum TimelineError {
     TrackNotFound(Uuid),
     InvalidClipBounds { timeline_in: i64, timeline_out: i64 },

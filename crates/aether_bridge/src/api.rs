@@ -1,5 +1,6 @@
 use flutter_rust_bridge::frb;
 pub use aether_core::timeline::{Clip, Rational, Timeline, Track, TrackKind};
+pub use aether_core::project::Project;
 use uuid::Uuid;
 
 #[allow(dead_code)]
@@ -45,11 +46,41 @@ pub struct _Timeline {
     pub tracks: Vec<Track>,
 }
 
+#[allow(dead_code)]
+#[frb(mirror(Project))]
+pub struct _Project {
+    pub id: String,
+    pub name: String,
+    pub project_path: String,
+    pub file_path: String,
+    pub timeline: Timeline,
+}
+
 pub fn init_engine() {
     flutter_rust_bridge::setup_default_user_utils();
     aether_render::init_render();
     aether_media::init_media();
 }
+
+// ---------------------------------------------------------
+// PROJECT MANAGEMENT
+// ---------------------------------------------------------
+
+pub fn create_project(name: String, base_dir: String) -> Result<Project, String> {
+    Project::create_new(&name, &base_dir)
+}
+
+pub fn load_project(file_path: String) -> Result<Project, String> {
+    Project::load(&file_path)
+}
+
+pub fn save_project(project: Project) -> Result<(), String> {
+    project.save()
+}
+
+// ---------------------------------------------------------
+// TIMELINE MANAGEMENT
+// ---------------------------------------------------------
 
 pub fn create_timeline() -> Timeline {
     let mut timeline = Timeline::new(Rational { num: 60, den: 1 });
@@ -76,4 +107,3 @@ pub fn add_clip_to_track(
         .map_err(|e| e.to_string())?;
     Ok(timeline)
 }
-
