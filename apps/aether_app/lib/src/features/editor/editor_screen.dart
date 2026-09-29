@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../theme/catppuccin.dart';
+import '../media_pool/media_pool_view.dart';
 import '../timeline/timeline_view.dart';
 
 class EditorScreen extends StatelessWidget {
@@ -23,7 +24,7 @@ class EditorScreen extends StatelessWidget {
                   child: _buildPanel(
                     title: "Media Pool",
                     icon: Icons.video_library_rounded,
-                    child: _buildDummyMediaPool(),
+                    child: const MediaPoolView(),
                   ),
                 ),
                 // Divisória sutil
@@ -105,37 +106,6 @@ class EditorScreen extends StatelessWidget {
   }
 
   // --- WIDGETS FAKES DE PRÉ-VISUALIZAÇÃO ---
-
-  Widget _buildDummyMediaPool() {
-    return ListView(
-      padding: const EdgeInsets.all(8),
-      children: [
-        _buildMediaItem("IMG_8342.MOV", "00:15", CatppuccinMocha.blue),
-        _buildMediaItem("entrevista_audio.wav", "12:04", CatppuccinMocha.green),
-        _buildMediaItem("B-Roll_Drone.mp4", "01:23", CatppuccinMocha.blue),
-      ],
-    );
-  }
-
-  Widget _buildMediaItem(String name, String duration, Color color) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 4),
-      decoration: BoxDecoration(
-        color: CatppuccinMocha.surface0.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: ListTile(
-        dense: true,
-        leading: Icon(
-          color == CatppuccinMocha.green ? Icons.audiotrack : Icons.videocam,
-          color: color,
-          size: 18,
-        ),
-        title: Text(name, style: const TextStyle(color: CatppuccinMocha.text, fontSize: 13)),
-        trailing: Text(duration, style: const TextStyle(color: CatppuccinMocha.subtext0, fontSize: 11)),
-      ),
-    );
-  }
 
   Widget _buildDummyPreview() {
     return Padding(

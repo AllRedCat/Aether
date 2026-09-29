@@ -41,6 +41,61 @@ Future<Timeline> addClipToTrack(
         sourceOut: sourceOut,
         timelineIn: timelineIn);
 
+/// Imports a media file, extracting its type and metadata via `aether_media`.
+/// If `project_path` is provided, the imported media is appended to the project's
+/// MediaPool and persisted to disk.
+Future<MediaItem> importMediaFile(
+        {String? projectPath, required String filePath}) =>
+    RustLib.instance.api
+        .crateApiImportMediaFile(projectPath: projectPath, filePath: filePath);
+
+/// Standalone inspection of a media file without touching project persistence.
+Future<MediaItem> inspectMediaFile({required String filePath}) =>
+    RustLib.instance.api.crateApiInspectMediaFile(filePath: filePath);
+
+/// Returns the list of imported media items in the specified project.
+Future<List<MediaItem>> getMediaItems({required String projectPath}) =>
+    RustLib.instance.api.crateApiGetMediaItems(projectPath: projectPath);
+
+/// Returns the entire `MediaPool` structure for the specified project.
+Future<MediaPool> getMediaPool({required String projectPath}) =>
+    RustLib.instance.api.crateApiGetMediaPool(projectPath: projectPath);
+
+/// Adds a clip referencing a media item's UUID to a specific track in the timeline.
+/// Defaults `source_in` to 0, `source_out` to media duration (or 300 PTS for images),
+/// and `timeline_in` to the timeline's current duration PTS (append).
+Future<Timeline> addClipToTrackFromMedia(
+        {required Timeline timeline,
+        required UuidValue trackId,
+        required MediaItem mediaItem,
+        int? sourceIn,
+        int? sourceOut,
+        int? timelineIn}) =>
+    RustLib.instance.api.crateApiAddClipToTrackFromMedia(
+        timeline: timeline,
+        trackId: trackId,
+        mediaItem: mediaItem,
+        sourceIn: sourceIn,
+        sourceOut: sourceOut,
+        timelineIn: timelineIn);
+
+/// Adds a clip referencing a media asset in the project's MediaPool to the project's timeline
+/// and persists the project to disk.
+Future<Project> addClipFromMediaPool(
+        {required Project project,
+        required UuidValue trackId,
+        required UuidValue mediaId,
+        int? sourceIn,
+        int? sourceOut,
+        int? timelineIn}) =>
+    RustLib.instance.api.crateApiAddClipFromMediaPool(
+        project: project,
+        trackId: trackId,
+        mediaId: mediaId,
+        sourceIn: sourceIn,
+        sourceOut: sourceOut,
+        timelineIn: timelineIn);
+
 class Clip {
   final UuidValue id;
   final UuidValue sourceId;
@@ -80,12 +135,120 @@ class Clip {
           timelineOut == other.timelineOut;
 }
 
+class MediaItem {
+  final UuidValue id;
+  final String filePath;
+  final String fileName;
+  final MediaType mediaType;
+  final MediaMetadata metadata;
+
+  const MediaItem({
+    required this.id,
+    required this.filePath,
+    required this.fileName,
+    required this.mediaType,
+    required this.metadata,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      filePath.hashCode ^
+      fileName.hashCode ^
+      mediaType.hashCode ^
+      metadata.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MediaItem &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          filePath == other.filePath &&
+          fileName == other.fileName &&
+          mediaType == other.mediaType &&
+          metadata == other.metadata;
+}
+
+class MediaMetadata {
+  final int? width;
+  final int? height;
+  final int durationPts;
+  final double durationSeconds;
+  final Rational? timebase;
+  final int? audioChannels;
+  final int? sampleRate;
+  final int fileSizeBytes;
+
+  const MediaMetadata({
+    this.width,
+    this.height,
+    required this.durationPts,
+    required this.durationSeconds,
+    this.timebase,
+    this.audioChannels,
+    this.sampleRate,
+    required this.fileSizeBytes,
+  });
+
+  @override
+  int get hashCode =>
+      width.hashCode ^
+      height.hashCode ^
+      durationPts.hashCode ^
+      durationSeconds.hashCode ^
+      timebase.hashCode ^
+      audioChannels.hashCode ^
+      sampleRate.hashCode ^
+      fileSizeBytes.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MediaMetadata &&
+          runtimeType == other.runtimeType &&
+          width == other.width &&
+          height == other.height &&
+          durationPts == other.durationPts &&
+          durationSeconds == other.durationSeconds &&
+          timebase == other.timebase &&
+          audioChannels == other.audioChannels &&
+          sampleRate == other.sampleRate &&
+          fileSizeBytes == other.fileSizeBytes;
+}
+
+class MediaPool {
+  final List<MediaItem> items;
+
+  const MediaPool({
+    required this.items,
+  });
+
+  @override
+  int get hashCode => items.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MediaPool &&
+          runtimeType == other.runtimeType &&
+          items == other.items;
+}
+
+enum MediaType {
+  video,
+  audio,
+  image,
+  ;
+}
+
 class Project {
   final String id;
   final String name;
   final String projectPath;
   final String filePath;
   final Timeline timeline;
+  final MediaPool mediaPool;
 
   const Project({
     required this.id,
@@ -93,6 +256,7 @@ class Project {
     required this.projectPath,
     required this.filePath,
     required this.timeline,
+    required this.mediaPool,
   });
 
   @override
@@ -101,7 +265,8 @@ class Project {
       name.hashCode ^
       projectPath.hashCode ^
       filePath.hashCode ^
-      timeline.hashCode;
+      timeline.hashCode ^
+      mediaPool.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -112,7 +277,8 @@ class Project {
           name == other.name &&
           projectPath == other.projectPath &&
           filePath == other.filePath &&
-          timeline == other.timeline;
+          timeline == other.timeline &&
+          mediaPool == other.mediaPool;
 }
 
 class Rational {

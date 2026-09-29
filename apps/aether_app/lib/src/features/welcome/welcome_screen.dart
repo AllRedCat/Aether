@@ -104,7 +104,7 @@ class WelcomeScreen extends StatelessWidget {
                         borderRadius: BorderRadius.circular(24),
                         boxShadow: [
                           BoxShadow(
-                            color: CatppuccinMocha.mauve.withOpacity(0.2),
+                            color: CatppuccinMocha.mauve.withValues(alpha: 0.2),
                             blurRadius: 30,
                             offset: const Offset(0, 10),
                           )
@@ -165,39 +165,42 @@ class WelcomeScreen extends StatelessWidget {
         color: isActive ? CatppuccinMocha.surface0 : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: ListTile(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        hoverColor: CatppuccinMocha.surface0.withOpacity(0.5),
-        leading: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: CatppuccinMocha.surface1,
-            borderRadius: BorderRadius.circular(6),
+      child: Material(
+        color: Colors.transparent,
+        child: ListTile(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          hoverColor: CatppuccinMocha.surface0.withValues(alpha: 0.5),
+          leading: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: CatppuccinMocha.surface1,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Icon(Icons.video_library_rounded, color: CatppuccinMocha.mauve, size: 20),
           ),
-          child: const Icon(Icons.video_library_rounded, color: CatppuccinMocha.mauve, size: 20),
-        ),
-        title: Text(
-          title,
-          style: const TextStyle(
-            color: CatppuccinMocha.text,
-            fontWeight: FontWeight.w500,
-            fontSize: 14,
+          title: Text(
+            title,
+            style: const TextStyle(
+              color: CatppuccinMocha.text,
+              fontWeight: FontWeight.w500,
+              fontSize: 14,
+            ),
           ),
+          subtitle: Text(
+            path,
+            style: const TextStyle(color: CatppuccinMocha.subtext0, fontSize: 11),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          trailing: Text(
+            date,
+            style: const TextStyle(color: CatppuccinMocha.overlay0, fontSize: 11),
+          ),
+          onTap: () {
+            // Navega para o workspace de edição
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const EditorScreen()));
+          },
         ),
-        subtitle: Text(
-          path,
-          style: const TextStyle(color: CatppuccinMocha.subtext0, fontSize: 11),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        trailing: Text(
-          date,
-          style: const TextStyle(color: CatppuccinMocha.overlay0, fontSize: 11),
-        ),
-        onTap: () {
-          // Navega para o workspace de edição
-          Navigator.push(context, MaterialPageRoute(builder: (_) => const EditorScreen()));
-        },
       ),
     );
   }
@@ -225,7 +228,7 @@ class WelcomeScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
+                color: color.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(icon, color: color, size: 28),

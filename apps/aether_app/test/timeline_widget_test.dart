@@ -73,6 +73,149 @@ class FakeRustLibApi implements RustLibApi {
     );
     return timeline;
   }
+
+  @override
+  Future<Project> crateApiCreateProject({
+    required String name,
+    required String baseDir,
+  }) async {
+    final projPath = '$baseDir/$name';
+    return Project(
+      id: 'proj-0001',
+      name: name,
+      projectPath: projPath,
+      filePath: '$projPath/$name.aether',
+      timeline: timeline,
+      mediaPool: const MediaPool(items: []),
+    );
+  }
+
+  @override
+  Future<Project> crateApiLoadProject({required String filePath}) async {
+    return Project(
+      id: 'proj-loaded',
+      name: 'Loaded Project',
+      projectPath: filePath,
+      filePath: filePath,
+      timeline: timeline,
+      mediaPool: const MediaPool(items: []),
+    );
+  }
+
+  @override
+  Future<void> crateApiSaveProject({required Project project}) async {}
+
+  @override
+  Future<MediaItem> crateApiInspectMediaFile({required String filePath}) async {
+    final isAudio = filePath.endsWith('.wav') || filePath.endsWith('.mp3');
+    final isImage = filePath.endsWith('.png') || filePath.endsWith('.jpg');
+    return MediaItem(
+      id: UuidValue.fromString('d0000000-0000-0000-0000-000000000001'),
+      filePath: filePath,
+      fileName: filePath.split('/').last,
+      mediaType: isAudio
+          ? MediaType.audio
+          : (isImage ? MediaType.image : MediaType.video),
+      metadata: MediaMetadata(
+        durationPts: isImage ? 300 : 900,
+        durationSeconds: isImage ? 5.0 : 15.0,
+        fileSizeBytes: 1024 * 1024,
+      ),
+    );
+  }
+
+  @override
+  Future<MediaItem> crateApiImportMediaFile({
+    String? projectPath,
+    required String filePath,
+  }) async {
+    return crateApiInspectMediaFile(filePath: filePath);
+  }
+
+  @override
+  Future<List<MediaItem>> crateApiGetMediaItems({
+    required String projectPath,
+  }) async {
+    return const [];
+  }
+
+  @override
+  Future<MediaPool> crateApiGetMediaPool({required String projectPath}) async {
+    return const MediaPool(items: []);
+  }
+
+  @override
+  Future<Timeline> crateApiAddClipToTrackFromMedia({
+    required Timeline timeline,
+    required UuidValue trackId,
+    required MediaItem mediaItem,
+    int? sourceIn,
+    int? sourceOut,
+    int? timelineIn,
+  }) async {
+    final sIn = sourceIn ?? 0;
+    final sOut = sourceOut ??
+        (mediaItem.metadata.durationPts > 0
+            ? mediaItem.metadata.durationPts
+            : 300);
+    final tIn = timelineIn ?? timeline.durationPts;
+    return crateApiAddClipToTrack(
+      timeline: timeline,
+      trackId: trackId,
+      sourceId: mediaItem.id,
+      sourceIn: sIn,
+      sourceOut: sOut,
+      timelineIn: tIn,
+    );
+  }
+
+  @override
+  Future<Project> crateApiAddClipFromMediaPool({
+    required Project project,
+    required UuidValue trackId,
+    required UuidValue mediaId,
+    int? sourceIn,
+    int? sourceOut,
+    int? timelineIn,
+  }) async {
+    MediaItem? mediaItem;
+    for (final item in project.mediaPool.items) {
+      if (item.id == mediaId) {
+        mediaItem = item;
+        break;
+      }
+    }
+    mediaItem ??= MediaItem(
+      id: mediaId,
+      filePath: '/media/mock.mp4',
+      fileName: 'mock.mp4',
+      mediaType: MediaType.video,
+      metadata: const MediaMetadata(
+        durationPts: 300,
+        durationSeconds: 5.0,
+        fileSizeBytes: 1024,
+      ),
+    );
+    final updatedTimeline = await crateApiAddClipToTrackFromMedia(
+      timeline: project.timeline,
+      trackId: trackId,
+      mediaItem: mediaItem,
+      sourceIn: sourceIn,
+      sourceOut: sourceOut,
+      timelineIn: timelineIn,
+    );
+    return Project(
+      id: project.id,
+      name: project.name,
+      projectPath: project.projectPath,
+      filePath: project.filePath,
+      timeline: updatedTimeline,
+      mediaPool: project.mediaPool,
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 /// Mock notifier allowing exact state control for isolated widget testing.

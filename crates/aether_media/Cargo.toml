@@ -4,3 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+aether_core = { path = "../aether_core" }
+infer = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
+symphonia = { version = "0.5.4", features = ["all"] }
+mp4 = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3"
+bytes = "1"
