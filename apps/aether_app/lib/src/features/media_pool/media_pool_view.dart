@@ -95,50 +95,61 @@ class MediaPoolView extends ConsumerWidget {
                 bottom: BorderSide(color: CatppuccinMocha.surface0),
               ),
             ),
-            child: Row(
-              children: [
-                Text(
-                  'Mídias (${state.items.length})',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: CatppuccinMocha.text,
-                    letterSpacing: 0.3,
-                  ),
-                ),
-                const Spacer(),
-                ElevatedButton.icon(
-                  key: const Key('import_media_button'),
-                  onPressed: state.isLoading ? null : () => notifier.importMedia(),
-                  icon: state.isLoading
-                      ? const SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: CatppuccinMocha.base,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Mídias (${state.items.length})',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: CatppuccinMocha.text,
+                            letterSpacing: 0.3,
                           ),
-                        )
-                      : const Icon(Icons.file_upload_outlined, size: 14),
-                  label: const Text(
-                    'Importar',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: CatppuccinMocha.mauve,
-                    foregroundColor: CatppuccinMocha.base,
-                    elevation: 0,
-                    visualDensity: VisualDensity.compact,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          key: const Key('import_media_button'),
+                          onPressed: state.isLoading ? null : () => notifier.importMedia(),
+                          icon: state.isLoading
+                              ? const SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: CatppuccinMocha.base,
+                                  ),
+                                )
+                              : const Icon(Icons.file_upload_outlined, size: 14),
+                          label: const Text(
+                            'Importar',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: CatppuccinMocha.mauve,
+                            foregroundColor: CatppuccinMocha.base,
+                            elevation: 0,
+                            visualDensity: VisualDensity.compact,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
                   ),
-                ),
-              ],
+                );
+              },
             ),
           ),
 
@@ -192,64 +203,69 @@ class MediaPoolView extends ConsumerWidget {
   Widget _buildEmptyState(BuildContext context, MediaPoolNotifier notifier) {
     return Center(
       key: const Key('media_pool_empty_state'),
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                color: CatppuccinMocha.surface0.withValues(alpha: 0.5),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.video_library_outlined,
-                size: 28,
-                color: CatppuccinMocha.overlay0,
-              ),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Nenhuma mídia importada',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: CatppuccinMocha.text,
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Importe vídeos, áudios e imagens para o projeto',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 11,
-                color: CatppuccinMocha.subtext0,
-              ),
-            ),
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              key: const Key('empty_import_media_button'),
-              onPressed: () => notifier.importMedia(),
-              icon: const Icon(Icons.add, size: 14),
-              label: const Text(
-                'Importar Arquivos',
-                style: TextStyle(fontSize: 12),
-              ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: CatppuccinMocha.mauve,
-                side: const BorderSide(color: CatppuccinMocha.mauve),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(6),
+      child: SingleChildScrollView(
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: CatppuccinMocha.surface0.withValues(alpha: 0.5),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.video_library_outlined,
+                    size: 28,
+                    color: CatppuccinMocha.overlay0,
+                  ),
                 ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
+                const SizedBox(height: 12),
+                const Text(
+                  'Nenhuma mídia importada',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: CatppuccinMocha.text,
+                  ),
                 ),
-              ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Importe vídeos, áudios e imagens para o projeto',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: CatppuccinMocha.subtext0,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  key: const Key('empty_import_media_button'),
+                  onPressed: () => notifier.importMedia(),
+                  icon: const Icon(Icons.add, size: 14),
+                  label: const Text(
+                    'Importar Arquivos',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: CatppuccinMocha.mauve,
+                    side: const BorderSide(color: CatppuccinMocha.mauve),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
