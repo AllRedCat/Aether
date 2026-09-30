@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../theme/catppuccin.dart';
 import '../media_pool/media_pool_view.dart';
+import 'frame_renderer.dart';
 import 'preview_provider.dart';
 
 /// Preview panel widget rendering hardware-accelerated video frames via Flutter's
@@ -97,11 +98,7 @@ class PreviewView extends ConsumerWidget {
       return Center(
         child: AspectRatio(
           aspectRatio: state.aspectRatio,
-          child: Texture(
-            key: const Key('preview_texture_widget'),
-            textureId: state.textureId,
-            filterQuality: FilterQuality.medium,
-          ),
+          child: FrameRenderer(frame: state.currentFrame),
         ),
       );
     }
