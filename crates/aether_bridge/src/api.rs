@@ -2,7 +2,9 @@ use flutter_rust_bridge::frb;
 pub use aether_core::timeline::{Clip, Rational, Timeline, Track, TrackKind};
 pub use aether_core::project::Project;
 pub use aether_core::media::{MediaItem, MediaMetadata, MediaPool, MediaType};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+pub use crate::frb_generated::StreamSink;
 
 // ---------------------------------------------------------
 // MIRRORED TYPES
@@ -281,5 +283,110 @@ pub fn add_clip_from_media_pool(
     }
 
     Ok(project)
+}
+
+// ---------------------------------------------------------
+// PREVIEW & TEXTURE STREAMING FFI ENDPOINTS (Milestone M2)
+// ---------------------------------------------------------
+
+/// Technical metadata and Flutter Texture widget handle for an active preview session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PreviewSessionInfo {
+    pub session_id: String,
+    pub texture_id: i64,
+    pub width: u32,
+    pub height: u32,
+    pub duration_pts: i64,
+    pub duration_seconds: f64,
+    pub fps: f64,
+    pub timebase: Rational,
+}
+
+/// Raw RGBA8 video frame transferred across the FFI boundary to Flutter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BridgeFrame {
+    pub width: u32,
+    pub height: u32,
+    pub pts: i64,
+    pub duration_pts: i64,
+    pub rgba_bytes: Vec<u8>,
+    pub row_stride_bytes: u32,
+    pub timestamp_seconds: f64,
+}
+
+/// Instantaneous playback state snapshot for reactive UI synchronization.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlaybackState {
+    pub session_id: String,
+    pub is_playing: bool,
+    pub current_pts: i64,
+    pub current_seconds: f64,
+    pub duration_pts: i64,
+    pub duration_seconds: f64,
+}
+
+/// Opens a media asset, extracts container metadata, pre-fetches the initial frame at PTS 0,
+/// allocates a unique texture ID for Flutter's `Texture(textureId: ...)` widget,
+/// and registers the active playback session in the `SessionRegistry`.
+pub fn create_preview_session(file_path: String) -> Result<PreviewSessionInfo, String> {
+    crate::session::SessionRegistry::global().create_session(&file_path)
+}
+
+/// Closes the active playback session, terminates background ticker threads,
+/// drops active stream sinks, and frees all decoder memory.
+pub fn close_preview_session(session_id: String) -> Result<(), String> {
+    crate::session::SessionRegistry::global().close_session(&session_id)
+}
+
+/// Starts sequential playback at the media asset's native frame rate.
+pub fn preview_play(session_id: String) -> Result<(), String> {
+    crate::session::SessionRegistry::global().play(&session_id)
+}
+
+/// Pauses sequential playback.
+pub fn preview_pause(session_id: String) -> Result<(), String> {
+    crate::session::SessionRegistry::global().pause(&session_id)
+}
+
+/// Seeks to a specific presentation timestamp (PTS).
+/// Clamps out-of-range targets to [0, duration_pts].
+/// Decodes and returns the frame at that position immediately for zero-latency scrubber response,
+/// while simultaneously broadcasting to any active frame and state stream sinks.
+pub fn preview_seek_pts(session_id: String, target_pts: i64) -> Result<Option<BridgeFrame>, String> {
+    crate::session::SessionRegistry::global().seek_pts(&session_id, target_pts)
+}
+
+/// Convenience seeking jumping to target fractional seconds.
+pub fn preview_seek_seconds(session_id: String, seconds: f64) -> Result<Option<BridgeFrame>, String> {
+    crate::session::SessionRegistry::global().seek_seconds(&session_id, seconds)
+}
+
+/// Returns the current playback position and playing state.
+pub fn get_preview_state(session_id: String) -> Result<PlaybackState, String> {
+    crate::session::SessionRegistry::global().get_state(&session_id)
+}
+
+/// Attaches a `StreamSink` to receive continuous RGBA8 video frames as they are decoded.
+/// Emits the cached initial frame immediately upon subscription.
+pub fn subscribe_preview_frames(
+    session_id: String,
+    sink: StreamSink<BridgeFrame>,
+) -> Result<(), String> {
+    crate::session::SessionRegistry::global().subscribe_frames(&session_id, sink)
+}
+
+/// Attaches a `StreamSink` to receive reactive playback state updates and PTS position ticks.
+/// Emits current playback state immediately upon subscription.
+pub fn subscribe_playback_state(
+    session_id: String,
+    sink: StreamSink<PlaybackState>,
+) -> Result<(), String> {
+    crate::session::SessionRegistry::global().subscribe_state(&session_id, sink)
+}
+
+/// Stateless thumbnail and scrub extractor: decodes a single frame at PTS without
+/// maintaining a persistent playback session.
+pub fn extract_single_frame(file_path: String, target_pts: i64) -> Result<BridgeFrame, String> {
+    crate::session::extract_single_frame(file_path, target_pts)
 }
 
