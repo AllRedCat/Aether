@@ -888,6 +888,11 @@ const _: fn() = || {
         let _: Option<u16> = MediaMetadata.audio_channels;
         let _: Option<u32> = MediaMetadata.sample_rate;
         let _: u64 = MediaMetadata.file_size_bytes;
+        let _: Option<String> = MediaMetadata.video_codec;
+        let _: Option<String> = MediaMetadata.audio_codec;
+        let _: Option<String> = MediaMetadata.pixel_format;
+        let _: Option<bool> = MediaMetadata.is_vfr;
+        let _: Option<Vec<i64>> = MediaMetadata.keyframe_pts;
     }
     {
         let MediaPool = None::<crate::api::MediaPool>.unwrap();
@@ -1038,6 +1043,18 @@ impl SseDecode for i64 {
     }
 }
 
+impl SseDecode for Vec<i64> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<i64>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<crate::api::Clip> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1115,6 +1132,11 @@ impl SseDecode for crate::api::MediaMetadata {
         let mut var_audioChannels = <Option<u16>>::sse_decode(deserializer);
         let mut var_sampleRate = <Option<u32>>::sse_decode(deserializer);
         let mut var_fileSizeBytes = <u64>::sse_decode(deserializer);
+        let mut var_videoCodec = <Option<String>>::sse_decode(deserializer);
+        let mut var_audioCodec = <Option<String>>::sse_decode(deserializer);
+        let mut var_pixelFormat = <Option<String>>::sse_decode(deserializer);
+        let mut var_isVfr = <Option<bool>>::sse_decode(deserializer);
+        let mut var_keyframePts = <Option<Vec<i64>>>::sse_decode(deserializer);
         return crate::api::MediaMetadata {
             width: var_width,
             height: var_height,
@@ -1124,6 +1146,11 @@ impl SseDecode for crate::api::MediaMetadata {
             audio_channels: var_audioChannels,
             sample_rate: var_sampleRate,
             file_size_bytes: var_fileSizeBytes,
+            video_codec: var_videoCodec,
+            audio_codec: var_audioCodec,
+            pixel_format: var_pixelFormat,
+            is_vfr: var_isVfr,
+            keyframe_pts: var_keyframePts,
         };
     }
 }
@@ -1171,6 +1198,17 @@ impl SseDecode for Option<String> {
     }
 }
 
+impl SseDecode for Option<bool> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<bool>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::BridgeFrame> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1209,6 +1247,17 @@ impl SseDecode for Option<u32> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<u32>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<Vec<i64>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<Vec<i64>>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -1494,6 +1543,11 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::MediaMetadata> {
             self.0.audio_channels.into_into_dart().into_dart(),
             self.0.sample_rate.into_into_dart().into_dart(),
             self.0.file_size_bytes.into_into_dart().into_dart(),
+            self.0.video_codec.into_into_dart().into_dart(),
+            self.0.audio_codec.into_into_dart().into_dart(),
+            self.0.pixel_format.into_into_dart().into_dart(),
+            self.0.is_vfr.into_into_dart().into_dart(),
+            self.0.keyframe_pts.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1790,6 +1844,16 @@ impl SseEncode for i64 {
     }
 }
 
+impl SseEncode for Vec<i64> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <i64>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<crate::api::Clip> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1852,6 +1916,11 @@ impl SseEncode for crate::api::MediaMetadata {
         <Option<u16>>::sse_encode(self.audio_channels, serializer);
         <Option<u32>>::sse_encode(self.sample_rate, serializer);
         <u64>::sse_encode(self.file_size_bytes, serializer);
+        <Option<String>>::sse_encode(self.video_codec, serializer);
+        <Option<String>>::sse_encode(self.audio_codec, serializer);
+        <Option<String>>::sse_encode(self.pixel_format, serializer);
+        <Option<bool>>::sse_encode(self.is_vfr, serializer);
+        <Option<Vec<i64>>>::sse_encode(self.keyframe_pts, serializer);
     }
 }
 
@@ -1899,6 +1968,16 @@ impl SseEncode for Option<String> {
     }
 }
 
+impl SseEncode for Option<bool> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <bool>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::BridgeFrame> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1935,6 +2014,16 @@ impl SseEncode for Option<u32> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <u32>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<Vec<i64>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <Vec<i64>>::sse_encode(value, serializer);
         }
     }
 }

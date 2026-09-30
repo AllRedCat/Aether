@@ -32,6 +32,11 @@ pub struct MediaMetadata {
     pub audio_channels: Option<u16>,
     pub sample_rate: Option<u32>,
     pub file_size_bytes: u64,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub pixel_format: Option<String>,
+    pub is_vfr: Option<bool>,
+    pub keyframe_pts: Option<Vec<i64>>,
 }
 
 impl Default for MediaMetadata {
@@ -45,6 +50,11 @@ impl Default for MediaMetadata {
             audio_channels: None,
             sample_rate: None,
             file_size_bytes: 0,
+            video_codec: None,
+            audio_codec: None,
+            pixel_format: None,
+            is_vfr: None,
+            keyframe_pts: None,
         }
     }
 }
@@ -197,6 +207,11 @@ mod tests {
             audio_channels: Some(2),
             sample_rate: Some(48000),
             file_size_bytes: 1024 * 1024,
+            video_codec: None,
+            audio_codec: None,
+            pixel_format: None,
+            is_vfr: None,
+            keyframe_pts: None,
         }
     }
 
@@ -227,6 +242,11 @@ mod tests {
             audio_channels: Some(2),
             sample_rate: Some(48000),
             file_size_bytes: 1024 * 1024 * 50,
+            video_codec: None,
+            audio_codec: None,
+            pixel_format: None,
+            is_vfr: None,
+            keyframe_pts: None,
         };
         assert_eq!(video_meta.fps(), Some(60.0));
     }
@@ -276,6 +296,11 @@ mod tests {
                 audio_channels: None,
                 sample_rate: None,
                 file_size_bytes: 4096,
+                video_codec: None,
+                audio_codec: None,
+                pixel_format: None,
+                is_vfr: None,
+                keyframe_pts: None,
             },
         );
         let id3 = item3.id;
@@ -337,6 +362,11 @@ mod tests {
                 audio_channels: Some(2),
                 sample_rate: Some(44100),
                 file_size_bytes: 2048,
+                video_codec: None,
+                audio_codec: None,
+                pixel_format: None,
+                is_vfr: None,
+                keyframe_pts: None,
             },
         );
         pool.add(item);

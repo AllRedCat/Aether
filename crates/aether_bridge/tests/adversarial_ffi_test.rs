@@ -94,7 +94,7 @@ fn dummy_media_item(media_type: MediaType, duration_pts: i64) -> MediaItem {
             timebase: Some(Rational { num: 60, den: 1 }),
             audio_channels: Some(2),
             sample_rate: Some(48000),
-            file_size_bytes: 1024,
+            file_size_bytes: 1024, video_codec: None, audio_codec: None, pixel_format: None, is_vfr: None, keyframe_pts: None,
         },
     }
 }

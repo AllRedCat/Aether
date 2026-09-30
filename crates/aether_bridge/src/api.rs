@@ -72,6 +72,11 @@ pub struct _MediaMetadata {
     pub audio_channels: Option<u16>,
     pub sample_rate: Option<u32>,
     pub file_size_bytes: u64,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub pixel_format: Option<String>,
+    pub is_vfr: Option<bool>,
+    pub keyframe_pts: Option<Vec<i64>>,
 }
 
 #[allow(dead_code)]

@@ -280,6 +280,11 @@ class MediaMetadata {
   final int? audioChannels;
   final int? sampleRate;
   final int fileSizeBytes;
+  final String? videoCodec;
+  final String? audioCodec;
+  final String? pixelFormat;
+  final bool? isVfr;
+  final List<int>? keyframePts;
 
   const MediaMetadata({
     this.width,
@@ -290,6 +295,11 @@ class MediaMetadata {
     this.audioChannels,
     this.sampleRate,
     required this.fileSizeBytes,
+    this.videoCodec,
+    this.audioCodec,
+    this.pixelFormat,
+    this.isVfr,
+    this.keyframePts,
   });
 
   @override
@@ -301,7 +311,12 @@ class MediaMetadata {
       timebase.hashCode ^
       audioChannels.hashCode ^
       sampleRate.hashCode ^
-      fileSizeBytes.hashCode;
+      fileSizeBytes.hashCode ^
+      videoCodec.hashCode ^
+      audioCodec.hashCode ^
+      pixelFormat.hashCode ^
+      isVfr.hashCode ^
+      keyframePts.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -315,7 +330,12 @@ class MediaMetadata {
           timebase == other.timebase &&
           audioChannels == other.audioChannels &&
           sampleRate == other.sampleRate &&
-          fileSizeBytes == other.fileSizeBytes;
+          fileSizeBytes == other.fileSizeBytes &&
+          videoCodec == other.videoCodec &&
+          audioCodec == other.audioCodec &&
+          pixelFormat == other.pixelFormat &&
+          isVfr == other.isVfr &&
+          keyframePts == other.keyframePts;
 }
 
 class MediaPool {

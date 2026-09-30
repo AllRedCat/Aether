@@ -55,6 +55,11 @@ pub struct MediaInspection {
     pub audio_channels: Option<u16>,
     pub sample_rate: Option<u32>,
     pub file_size_bytes: u64,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub pixel_format: Option<String>,
+    pub is_vfr: Option<bool>,
+    pub keyframe_pts: Option<Vec<i64>>,
 }
 
 impl MediaInspection {
@@ -68,6 +73,11 @@ impl MediaInspection {
             audio_channels: self.audio_channels,
             sample_rate: self.sample_rate,
             file_size_bytes: self.file_size_bytes,
+            video_codec: self.video_codec.clone(),
+            audio_codec: self.audio_codec.clone(),
+            pixel_format: self.pixel_format.clone(),
+            is_vfr: self.is_vfr,
+            keyframe_pts: self.keyframe_pts.clone(),
         }
     }
 
@@ -200,6 +210,11 @@ fn inspect_image(
         audio_channels: None,
         sample_rate: None,
         file_size_bytes,
+        video_codec: None,
+        audio_codec: None,
+        pixel_format: None,
+        is_vfr: None,
+        keyframe_pts: None,
     })
 }
 
@@ -275,6 +290,11 @@ fn inspect_audio(
             audio_channels,
             sample_rate,
             file_size_bytes,
+            video_codec: None,
+            audio_codec: None, // Could sniff later from track codec, but keeping simple for now
+            pixel_format: None,
+            is_vfr: None,
+            keyframe_pts: None,
         })
     }))
     .unwrap_or_else(|payload| {
@@ -345,6 +365,88 @@ fn inspect_video(
             None => (None, None),
         };
 
+        let video_codec = video_track.and_then(|vt| {
+            match vt.media_type().ok() {
+                Some(mp4::MediaType::H264) => Some("H.264".to_string()),
+                Some(mp4::MediaType::H265) => Some("HEVC".to_string()),
+                Some(mp4::MediaType::VP9) => Some("VP9".to_string()),
+                _ => Some("Unknown".to_string()),
+            }
+        });
+
+        let audio_codec = audio_track.and_then(|at| {
+            match at.media_type().ok() {
+                Some(mp4::MediaType::AAC) => Some("AAC".to_string()),
+                Some(mp4::MediaType::TTXT) => Some("Text".to_string()),
+                _ => Some("Unknown".to_string()),
+            }
+        });
+
+        let pixel_format = video_track.and_then(|_vt| {
+            Some("yuv420p".to_string())
+        });
+
+        let (is_vfr, keyframe_pts) = match video_track {
+            Some(vt) => {
+                let stbl = &vt.trak.mdia.minf.stbl;
+                let mut detected_vfr = false;
+                
+                if stbl.stts.entries.len() > 1 {
+                    detected_vfr = true;
+                }
+
+                let mut kf_list: Vec<i64> = Vec::new();
+                let timescale = vt.timescale();
+                
+                let mut pts_by_sample_id = std::collections::HashMap::new();
+                let mut current_dts: u64 = 0;
+                let mut sample_id = 1u32;
+                
+                for entry in &stbl.stts.entries {
+                    for _ in 0..entry.sample_count {
+                        pts_by_sample_id.insert(sample_id, current_dts);
+                        current_dts += entry.sample_delta as u64;
+                        sample_id += 1;
+                    }
+                }
+                
+                if let Some(ctts) = &stbl.ctts {
+                    let mut sample_id = 1u32;
+                    for entry in &ctts.entries {
+                        for _ in 0..entry.sample_count {
+                            if let Some(pts) = pts_by_sample_id.get_mut(&sample_id) {
+                                *pts = (*pts as i64 + entry.sample_offset as i64).max(0) as u64;
+                            }
+                            sample_id += 1;
+                        }
+                    }
+                }
+                
+                if let Some(stss) = &stbl.stss {
+                    for &sync_sample_id in &stss.entries {
+                        if let Some(&pts) = pts_by_sample_id.get(&sync_sample_id) {
+                            let pts_seconds = pts as f64 / timescale as f64;
+                            let project_pts = (pts_seconds * fps_ratio).round() as i64;
+                            kf_list.push(project_pts);
+                        }
+                    }
+                } else {
+                    for sample_id in 1..pts_by_sample_id.len() as u32 + 1 {
+                        if let Some(&pts) = pts_by_sample_id.get(&sample_id) {
+                            let pts_seconds = pts as f64 / timescale as f64;
+                            let project_pts = (pts_seconds * fps_ratio).round() as i64;
+                            kf_list.push(project_pts);
+                        }
+                    }
+                }
+                
+                kf_list.sort_unstable();
+
+                (Some(detected_vfr), Some(kf_list))
+            },
+            None => (None, None),
+        };
+
         Ok(MediaInspection {
             media_type: MediaType::Video,
             width,
@@ -356,6 +458,11 @@ fn inspect_video(
             audio_channels,
             sample_rate,
             file_size_bytes,
+            video_codec,
+            audio_codec,
+            pixel_format,
+            is_vfr,
+            keyframe_pts,
         })
     }))
     .unwrap_or_else(|payload| {

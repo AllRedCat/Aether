@@ -25,7 +25,7 @@ fn test_project_json_roundtrip_preserves_media_pool_and_clips() {
             timebase: Some(Rational { num: 60, den: 1 }),
             audio_channels: Some(2),
             sample_rate: Some(48000),
-            file_size_bytes: 45_000_000,
+            file_size_bytes: 45_000_000, video_codec: None, audio_codec: None, pixel_format: None, is_vfr: None, keyframe_pts: None,
         },
     );
     let video_id = project.media_pool.add(video_item);
@@ -41,7 +41,7 @@ fn test_project_json_roundtrip_preserves_media_pool_and_clips() {
             timebase: Some(Rational { num: 60, den: 1 }),
             audio_channels: Some(2),
             sample_rate: Some(44100),
-            file_size_bytes: 5_292_000,
+            file_size_bytes: 5_292_000, video_codec: None, audio_codec: None, pixel_format: None, is_vfr: None, keyframe_pts: None,
         },
     );
     let audio_id = project.media_pool.add(audio_item);
@@ -117,7 +117,7 @@ fn test_backwards_compatible_deserialization_without_media_pool() {
             timebase: None,
             audio_channels: None,
             sample_rate: None,
-            file_size_bytes: 1024,
+            file_size_bytes: 1024, video_codec: None, audio_codec: None, pixel_format: None, is_vfr: None, keyframe_pts: None,
         },
     );
     let id = project.media_pool.add(new_item);

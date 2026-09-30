@@ -36,7 +36,7 @@ fn test_scale_mediapool_1500_items_query_and_mutation() {
             timebase: Some(Rational { num: 60, den: 1 }),
             audio_channels: if media_type == MediaType::Image { None } else { Some(2) },
             sample_rate: if media_type == MediaType::Image { None } else { Some(48000) },
-            file_size_bytes: (i as u64 + 1) * 1024 * 1024,
+            file_size_bytes: (i as u64 + 1) * 1024 * 1024, video_codec: None, audio_codec: None, pixel_format: None, is_vfr: None, keyframe_pts: None,
         };
 
         let item = MediaItem::new(path, media_type, metadata);
@@ -139,7 +139,7 @@ fn test_nondestructive_stress_100_subclips_same_media() {
             timebase: Some(Rational { num: 60, den: 1 }),
             audio_channels: Some(8),
             sample_rate: Some(96000),
-            file_size_bytes: 40_000_000_000,
+            file_size_bytes: 40_000_000_000, video_codec: None, audio_codec: None, pixel_format: None, is_vfr: None, keyframe_pts: None,
         },
     );
     let master_snapshot = master_item.clone();
@@ -580,7 +580,7 @@ fn test_large_project_scale_serialization_roundtrip() {
                 timebase: Some(Rational { num: 60, den: 1 }),
                 audio_channels: if media_type == MediaType::Image { None } else { Some(2) },
                 sample_rate: if media_type == MediaType::Image { None } else { Some(48000) },
-                file_size_bytes: (i as u64 + 1) * 50 * 1024 * 1024,
+                file_size_bytes: (i as u64 + 1) * 50 * 1024 * 1024, video_codec: None, audio_codec: None, pixel_format: None, is_vfr: None, keyframe_pts: None,
             },
         );
         media_ids.push(project.add_media(item));
@@ -676,7 +676,7 @@ fn test_adversarial_clip_bounds_and_error_handling() {
             timebase: Some(Rational { num: 60, den: 1 }),
             audio_channels: Some(2),
             sample_rate: Some(48000),
-            file_size_bytes: 1024,
+            file_size_bytes: 1024, video_codec: None, audio_codec: None, pixel_format: None, is_vfr: None, keyframe_pts: None,
         },
     );
     let media_id = project.add_media(media);
@@ -768,7 +768,7 @@ fn test_adversarial_mediapool_duplicate_paths_and_fps_zero_timebase() {
         timebase: Some(Rational { num: 60, den: 0 }),
         audio_channels: None,
         sample_rate: None,
-        file_size_bytes: 500,
+        file_size_bytes: 500, video_codec: None, audio_codec: None, pixel_format: None, is_vfr: None, keyframe_pts: None,
     };
     assert_eq!(zero_den_meta.fps(), None, "Denominator of 0 must return None without panicking");
 

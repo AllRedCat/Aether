@@ -172,6 +172,11 @@ mod tests {
                 audio_channels: Some(2),
                 sample_rate: Some(48000),
                 file_size_bytes: 1024 * 1024 * 100,
+                video_codec: None,
+                audio_codec: None,
+                pixel_format: None,
+                is_vfr: None,
+                keyframe_pts: None,
             },
         );
         let media_id = project.add_media(media_item);
@@ -265,6 +270,11 @@ mod tests {
                 audio_channels: Some(2),
                 sample_rate: Some(48000),
                 file_size_bytes: 50 * 1024 * 1024,
+                video_codec: None,
+                audio_codec: None,
+                pixel_format: None,
+                is_vfr: None,
+                keyframe_pts: None,
             },
         );
         let media_id = project.add_media(media);

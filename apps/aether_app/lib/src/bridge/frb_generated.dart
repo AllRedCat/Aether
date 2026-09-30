@@ -851,6 +851,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  bool dco_decode_box_autoadd_bool(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as bool;
+  }
+
+  @protected
   BridgeFrame dco_decode_box_autoadd_bridge_frame(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_bridge_frame(raw);
@@ -944,6 +950,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<int> dco_decode_list_CastedPrimitive_i_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_CastedPrimitive_i_64).toList();
+  }
+
+  @protected
   List<Clip> dco_decode_list_clip(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_clip).toList();
@@ -986,8 +998,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MediaMetadata dco_decode_media_metadata(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 13)
+      throw Exception('unexpected arr length: expect 13 but see ${arr.length}');
     return MediaMetadata(
       width: dco_decode_opt_box_autoadd_u_32(arr[0]),
       height: dco_decode_opt_box_autoadd_u_32(arr[1]),
@@ -997,6 +1009,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       audioChannels: dco_decode_opt_box_autoadd_u_16(arr[5]),
       sampleRate: dco_decode_opt_box_autoadd_u_32(arr[6]),
       fileSizeBytes: dco_decode_CastedPrimitive_u_64(arr[7]),
+      videoCodec: dco_decode_opt_String(arr[8]),
+      audioCodec: dco_decode_opt_String(arr[9]),
+      pixelFormat: dco_decode_opt_String(arr[10]),
+      isVfr: dco_decode_opt_box_autoadd_bool(arr[11]),
+      keyframePts: dco_decode_opt_list_CastedPrimitive_i_64(arr[12]),
     );
   }
 
@@ -1030,6 +1047,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  bool? dco_decode_opt_box_autoadd_bool(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_bool(raw);
+  }
+
+  @protected
   BridgeFrame? dco_decode_opt_box_autoadd_bridge_frame(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_bridge_frame(raw);
@@ -1051,6 +1074,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_u_32(raw);
+  }
+
+  @protected
+  List<int>? dco_decode_opt_list_CastedPrimitive_i_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_list_CastedPrimitive_i_64(raw);
   }
 
   @protected
@@ -1234,6 +1263,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  bool sse_decode_box_autoadd_bool(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_bool(deserializer));
+  }
+
+  @protected
   BridgeFrame sse_decode_box_autoadd_bridge_frame(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -1333,6 +1368,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<int> sse_decode_list_CastedPrimitive_i_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <int>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_CastedPrimitive_i_64(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<Clip> sse_decode_list_clip(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -1402,6 +1449,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_audioChannels = sse_decode_opt_box_autoadd_u_16(deserializer);
     var var_sampleRate = sse_decode_opt_box_autoadd_u_32(deserializer);
     var var_fileSizeBytes = sse_decode_CastedPrimitive_u_64(deserializer);
+    var var_videoCodec = sse_decode_opt_String(deserializer);
+    var var_audioCodec = sse_decode_opt_String(deserializer);
+    var var_pixelFormat = sse_decode_opt_String(deserializer);
+    var var_isVfr = sse_decode_opt_box_autoadd_bool(deserializer);
+    var var_keyframePts =
+        sse_decode_opt_list_CastedPrimitive_i_64(deserializer);
     return MediaMetadata(
         width: var_width,
         height: var_height,
@@ -1410,7 +1463,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         timebase: var_timebase,
         audioChannels: var_audioChannels,
         sampleRate: var_sampleRate,
-        fileSizeBytes: var_fileSizeBytes);
+        fileSizeBytes: var_fileSizeBytes,
+        videoCodec: var_videoCodec,
+        audioCodec: var_audioCodec,
+        pixelFormat: var_pixelFormat,
+        isVfr: var_isVfr,
+        keyframePts: var_keyframePts);
   }
 
   @protected
@@ -1444,6 +1502,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_String(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  bool? sse_decode_opt_box_autoadd_bool(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_bool(deserializer));
     } else {
       return null;
     }
@@ -1489,6 +1558,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_u_32(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  List<int>? sse_decode_opt_list_CastedPrimitive_i_64(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_list_CastedPrimitive_i_64(deserializer));
     } else {
       return null;
     }
@@ -1684,6 +1765,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_bool(bool self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_bridge_frame(
       BridgeFrame self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -1771,6 +1858,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_CastedPrimitive_i_64(
+      List<int> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_CastedPrimitive_i_64(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_clip(List<Clip> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
@@ -1827,6 +1924,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_box_autoadd_u_16(self.audioChannels, serializer);
     sse_encode_opt_box_autoadd_u_32(self.sampleRate, serializer);
     sse_encode_CastedPrimitive_u_64(self.fileSizeBytes, serializer);
+    sse_encode_opt_String(self.videoCodec, serializer);
+    sse_encode_opt_String(self.audioCodec, serializer);
+    sse_encode_opt_String(self.pixelFormat, serializer);
+    sse_encode_opt_box_autoadd_bool(self.isVfr, serializer);
+    sse_encode_opt_list_CastedPrimitive_i_64(self.keyframePts, serializer);
   }
 
   @protected
@@ -1859,6 +1961,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_String(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_bool(bool? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_bool(self, serializer);
     }
   }
 
@@ -1901,6 +2013,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_u_32(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_list_CastedPrimitive_i_64(
+      List<int>? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_list_CastedPrimitive_i_64(self, serializer);
     }
   }
 

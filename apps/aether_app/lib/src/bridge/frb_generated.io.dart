@@ -46,6 +46,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  bool dco_decode_box_autoadd_bool(dynamic raw);
+
+  @protected
   BridgeFrame dco_decode_box_autoadd_bridge_frame(dynamic raw);
 
   @protected
@@ -82,6 +85,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
+  List<int> dco_decode_list_CastedPrimitive_i_64(dynamic raw);
+
+  @protected
   List<Clip> dco_decode_list_clip(dynamic raw);
 
   @protected
@@ -112,6 +118,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
+  bool? dco_decode_opt_box_autoadd_bool(dynamic raw);
+
+  @protected
   BridgeFrame? dco_decode_opt_box_autoadd_bridge_frame(dynamic raw);
 
   @protected
@@ -122,6 +131,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
+
+  @protected
+  List<int>? dco_decode_opt_list_CastedPrimitive_i_64(dynamic raw);
 
   @protected
   PlaybackState dco_decode_playback_state(dynamic raw);
@@ -186,6 +198,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  bool sse_decode_box_autoadd_bool(SseDeserializer deserializer);
+
+  @protected
   BridgeFrame sse_decode_box_autoadd_bridge_frame(SseDeserializer deserializer);
 
   @protected
@@ -222,6 +237,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
+  List<int> sse_decode_list_CastedPrimitive_i_64(SseDeserializer deserializer);
+
+  @protected
   List<Clip> sse_decode_list_clip(SseDeserializer deserializer);
 
   @protected
@@ -252,6 +270,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
+  bool? sse_decode_opt_box_autoadd_bool(SseDeserializer deserializer);
+
+  @protected
   BridgeFrame? sse_decode_opt_box_autoadd_bridge_frame(
       SseDeserializer deserializer);
 
@@ -263,6 +284,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
+  List<int>? sse_decode_opt_list_CastedPrimitive_i_64(
+      SseDeserializer deserializer);
 
   @protected
   PlaybackState sse_decode_playback_state(SseDeserializer deserializer);
@@ -329,6 +354,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_bool(bool self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_bridge_frame(
       BridgeFrame self, SseSerializer serializer);
 
@@ -367,6 +395,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_CastedPrimitive_i_64(
+      List<int> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_clip(List<Clip> self, SseSerializer serializer);
 
   @protected
@@ -399,6 +431,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_bool(bool? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_box_autoadd_bridge_frame(
       BridgeFrame? self, SseSerializer serializer);
 
@@ -411,6 +446,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_list_CastedPrimitive_i_64(
+      List<int>? self, SseSerializer serializer);
 
   @protected
   void sse_encode_playback_state(PlaybackState self, SseSerializer serializer);
