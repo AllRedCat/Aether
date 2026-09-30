@@ -15,7 +15,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
-  rust_lib_aether_app: 760475cdcc7bb13dbd90bd7d63353402cacb4fc2
+  rust_lib_aether_app: 922fe7dbfd0bd2ef5689234e1daefe59ea701aaa
 
 PODFILE CHECKSUM: 1e95c36afbfd1cb6423ceca4de7a8e1b256fb6ac
 
