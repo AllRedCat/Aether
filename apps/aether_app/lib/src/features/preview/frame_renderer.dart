@@ -52,6 +52,7 @@ class _FrameRendererState extends State<FrameRenderer> {
             _decodeFrame();
           }
         },
+        rowBytes: frameToDecode.rowStrideBytes,
       );
     } catch (e) {
       _isDecoding = false;
