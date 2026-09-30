@@ -369,3 +369,16 @@ fn inspect_video(
         Err(MediaError::CorruptFile(format!("MP4 parser panicked: {}", panic_msg)))
     })
 }
+
+pub mod decoder;
+
+pub use decoder::{
+    open_audio_decoder, open_audio_decoder_with_timebase, open_media_decoder,
+    open_media_decoder_with_timebase, open_video_decoder, open_video_decoder_with_timebase,
+    AudioBuffer, AudioDecoder, AudioSampleFormat, CompositeMediaDecoder, DecoderError,
+    DecoderResult, ImageSequenceDecoder, MediaDecoder, PixelFormat, SymphoniaAudioDecoder,
+    SyntheticPattern, SyntheticVideoDecoder, VideoDecoder, VideoFrame,
+};
+
+#[cfg(target_os = "macos")]
+pub use decoder::AvFoundationVideoDecoder;

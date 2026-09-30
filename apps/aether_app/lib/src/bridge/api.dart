@@ -7,6 +7,8 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:uuid/uuid.dart';
 
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`
+
 Future<void> initEngine() => RustLib.instance.api.crateApiInitEngine();
 
 Future<Project> createProject(
@@ -95,6 +97,105 @@ Future<Project> addClipFromMediaPool(
         sourceIn: sourceIn,
         sourceOut: sourceOut,
         timelineIn: timelineIn);
+
+/// Opens a media asset, extracts container metadata, pre-fetches the initial frame at PTS 0,
+/// allocates a unique texture ID for Flutter's `Texture(textureId: ...)` widget,
+/// and registers the active playback session in the `SessionRegistry`.
+Future<PreviewSessionInfo> createPreviewSession({required String filePath}) =>
+    RustLib.instance.api.crateApiCreatePreviewSession(filePath: filePath);
+
+/// Closes the active playback session, terminates background ticker threads,
+/// drops active stream sinks, and frees all decoder memory.
+Future<void> closePreviewSession({required String sessionId}) =>
+    RustLib.instance.api.crateApiClosePreviewSession(sessionId: sessionId);
+
+/// Starts sequential playback at the media asset's native frame rate.
+Future<void> previewPlay({required String sessionId}) =>
+    RustLib.instance.api.crateApiPreviewPlay(sessionId: sessionId);
+
+/// Pauses sequential playback.
+Future<void> previewPause({required String sessionId}) =>
+    RustLib.instance.api.crateApiPreviewPause(sessionId: sessionId);
+
+/// Seeks to a specific presentation timestamp (PTS).
+/// Clamps out-of-range targets to [0, duration_pts].
+/// Decodes and returns the frame at that position immediately for zero-latency scrubber response,
+/// while simultaneously broadcasting to any active frame and state stream sinks.
+Future<BridgeFrame?> previewSeekPts(
+        {required String sessionId, required int targetPts}) =>
+    RustLib.instance.api
+        .crateApiPreviewSeekPts(sessionId: sessionId, targetPts: targetPts);
+
+/// Convenience seeking jumping to target fractional seconds.
+Future<BridgeFrame?> previewSeekSeconds(
+        {required String sessionId, required double seconds}) =>
+    RustLib.instance.api
+        .crateApiPreviewSeekSeconds(sessionId: sessionId, seconds: seconds);
+
+/// Returns the current playback position and playing state.
+Future<PlaybackState> getPreviewState({required String sessionId}) =>
+    RustLib.instance.api.crateApiGetPreviewState(sessionId: sessionId);
+
+/// Attaches a `StreamSink` to receive continuous RGBA8 video frames as they are decoded.
+/// Emits the cached initial frame immediately upon subscription.
+Stream<BridgeFrame> subscribePreviewFrames({required String sessionId}) =>
+    RustLib.instance.api.crateApiSubscribePreviewFrames(sessionId: sessionId);
+
+/// Attaches a `StreamSink` to receive reactive playback state updates and PTS position ticks.
+/// Emits current playback state immediately upon subscription.
+Stream<PlaybackState> subscribePlaybackState({required String sessionId}) =>
+    RustLib.instance.api.crateApiSubscribePlaybackState(sessionId: sessionId);
+
+/// Stateless thumbnail and scrub extractor: decodes a single frame at PTS without
+/// maintaining a persistent playback session.
+Future<BridgeFrame> extractSingleFrame(
+        {required String filePath, required int targetPts}) =>
+    RustLib.instance.api
+        .crateApiExtractSingleFrame(filePath: filePath, targetPts: targetPts);
+
+/// Raw RGBA8 video frame transferred across the FFI boundary to Flutter.
+class BridgeFrame {
+  final int width;
+  final int height;
+  final int pts;
+  final int durationPts;
+  final Uint8List rgbaBytes;
+  final int rowStrideBytes;
+  final double timestampSeconds;
+
+  const BridgeFrame({
+    required this.width,
+    required this.height,
+    required this.pts,
+    required this.durationPts,
+    required this.rgbaBytes,
+    required this.rowStrideBytes,
+    required this.timestampSeconds,
+  });
+
+  @override
+  int get hashCode =>
+      width.hashCode ^
+      height.hashCode ^
+      pts.hashCode ^
+      durationPts.hashCode ^
+      rgbaBytes.hashCode ^
+      rowStrideBytes.hashCode ^
+      timestampSeconds.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BridgeFrame &&
+          runtimeType == other.runtimeType &&
+          width == other.width &&
+          height == other.height &&
+          pts == other.pts &&
+          durationPts == other.durationPts &&
+          rgbaBytes == other.rgbaBytes &&
+          rowStrideBytes == other.rowStrideBytes &&
+          timestampSeconds == other.timestampSeconds;
+}
 
 class Clip {
   final UuidValue id;
@@ -240,6 +341,94 @@ enum MediaType {
   audio,
   image,
   ;
+}
+
+/// Instantaneous playback state snapshot for reactive UI synchronization.
+class PlaybackState {
+  final String sessionId;
+  final bool isPlaying;
+  final int currentPts;
+  final double currentSeconds;
+  final int durationPts;
+  final double durationSeconds;
+
+  const PlaybackState({
+    required this.sessionId,
+    required this.isPlaying,
+    required this.currentPts,
+    required this.currentSeconds,
+    required this.durationPts,
+    required this.durationSeconds,
+  });
+
+  @override
+  int get hashCode =>
+      sessionId.hashCode ^
+      isPlaying.hashCode ^
+      currentPts.hashCode ^
+      currentSeconds.hashCode ^
+      durationPts.hashCode ^
+      durationSeconds.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PlaybackState &&
+          runtimeType == other.runtimeType &&
+          sessionId == other.sessionId &&
+          isPlaying == other.isPlaying &&
+          currentPts == other.currentPts &&
+          currentSeconds == other.currentSeconds &&
+          durationPts == other.durationPts &&
+          durationSeconds == other.durationSeconds;
+}
+
+/// Technical metadata and Flutter Texture widget handle for an active preview session.
+class PreviewSessionInfo {
+  final String sessionId;
+  final int textureId;
+  final int width;
+  final int height;
+  final int durationPts;
+  final double durationSeconds;
+  final double fps;
+  final Rational timebase;
+
+  const PreviewSessionInfo({
+    required this.sessionId,
+    required this.textureId,
+    required this.width,
+    required this.height,
+    required this.durationPts,
+    required this.durationSeconds,
+    required this.fps,
+    required this.timebase,
+  });
+
+  @override
+  int get hashCode =>
+      sessionId.hashCode ^
+      textureId.hashCode ^
+      width.hashCode ^
+      height.hashCode ^
+      durationPts.hashCode ^
+      durationSeconds.hashCode ^
+      fps.hashCode ^
+      timebase.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PreviewSessionInfo &&
+          runtimeType == other.runtimeType &&
+          sessionId == other.sessionId &&
+          textureId == other.textureId &&
+          width == other.width &&
+          height == other.height &&
+          durationPts == other.durationPts &&
+          durationSeconds == other.durationSeconds &&
+          fps == other.fps &&
+          timebase == other.timebase;
 }
 
 class Project {

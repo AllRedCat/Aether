@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::io::Cursor;
 
 /// Generates a valid minimal PNG image with given dimensions in memory.
@@ -80,4 +82,94 @@ pub fn create_synthetic_mp4(width: u16, height: u16, duration_seconds: u32) -> V
     writer.write_end().expect("Failed to finalize MP4");
 
     writer.into_writer().into_inner()
+}
+
+pub const SAMPLE_H264_MP4_BASE64: &str = "\
+AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAANLbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAA\
+AAAD6AAAA+gAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAA\
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAnZ0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAAB\
+AAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAA\
+AEAAAABAAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAPoAAAAAAABAAAAAAHubWRpYQAAACBtZGhk\
+AAAAAAAAAAAAAAAAAAAoAAAAKABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRl\
+b0hhbmRsZXIAAAABmW1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAA\
+AQAAAAx1cmwgAAAAAQAAAVlzdGJsAAAAuXN0c2QAAAAAAAAAAQAAAKlhdmMxAAAAAAAAAAEAAAAAAAAA\
+AAAAAAAAAAAAAEAAQABIAAAASAAAAAAAAAABFExhdmM2My4xLjEwMSBsaWJ4MjY0AAAAAAAAAAAAAAAAGP//\
+AAAAL2F2Y0MBQsAe/+EAF2dCwB7ZBCbARAAAAwAEAAADAFA8WLkgAQAFaMuDyyAAAAAQcGFzcAAAAAEA\
+AAABAAAAFGJ0cnQAAAAAAAA/oAAAAAAAAAAYc3R0cwAAAAAAAAABAAAACgAABAAAAAAUc3RzcwAAAAAA\
+AAABAAAAAQAAABxzdHNjAAAAAAAAAAEAAAABAAAACgAAAAEAAAA8c3RzegAAAAAAAAAAAAAACgAABgAA\
+AAAnAAAAOwAAAE4AAAAvAAAAUgAAAC0AAABJAAAAIAAAAC0AAAAUc3RjbwAAAAAAAAABAAADewAAAGF1\
+ZHRhAAAAWW1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALGlsc3QAAAAk\
+cXRvbwAAABxkYXRhAAAAAQAAAABMYXZmNjMuMS4xMDEAAAAIZnJlZQAAB/xtZGF0AAACcQYF//9t3EXp\
+vebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSByMzIyMiBiMzU2MDVhIC0gSC4yNjQvTVBFRy00IEFW\
+QyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQu\
+aHRtbCAtIG9wdGlvbnM6IGNhYmFjPTAgcmVmPTMgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MToweDEx\
+MSBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDowLjAwIG1peGVkX3JlZj0xIG1lX3Jhbmdl\
+PTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MCBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0\
+X3Bza2lwPTEgY2hyb21hX3FwX29mZnNldD0tMiB0aHJlYWRzPTIgbG9va2FoZWFkX3RocmVhZHM9MSBz\
+bGljZWRfdGhyZWFkcz0wIG5yPTAgZGVjaW1hdGU9MSBpbnRlcmxhY2VkPTAgYmx1cmF5X2NvbXBhdD0w\
+IGNvbnN0cmFpbmVkX2ludHJhPTAgYmZyYW1lcz0wIHdlaWdodHA9MCBrZXlpbnQ9MjUwIGtleWludF9t\
+aW49MTAgc2NlbmVjdXQ9NDAgaW50cmFfcmVmcmVzaD0wIHJjX2xvb2thaGVhZD00MCByYz1jcmYgbWJ0\
+cmVlPTEgY3JmPTIzLjAgcWNvbXA9MC42MCBxcG1pbj0wIHFwbWF4PTY5IHFwc3RlcD00IGlwX3JhdGlv\
+PTEuNDAgYXE9MToxLjAwAIAAAAOHZYiEJwxgAICElguLfONxKcCYXlf+ADytes1YKT+uuADwCVQ+kEaU\
+Czf66AB52tWauFJ/XQYcQAA0ByIAAIGIAAgKGAEBb0LO4Qjrex93CABozMgITFieqKKBciIgITFCOKKL\
+cicQApfjYBI/QAAgHbNn6M12xbP7HYAsPxzsXZsGDKfGaAn98IASAAoAHBAACACAAINoDgKZUFRImfaB\
+PzVYB338BQmYwf74gqEiZ94D03EpSw/EPD/hqDgAEwFDRyW/geBgKyAjLTQOvL8IAQAGBoAAghhAAHQQ\
+AzpAABIDDJYAvpgsSZwwO6f78quWAL6MBIJGLOAZ8/3/MPrFKeAAAIB2AC2qQKaBPJPWeKAAIB39YADz\
+Vp1NzX/QXyJiKmOb8j7IHoAaLxYp26lIpn/9eEAAaAHsBgQAAgYgACDOgAFV6dglIX5wYFPzXGkz9ET8\
+wE8YApA9xwYENENlMXOMlag7MxB2h+F4AFxh425fWiP/15mbG7vbK5R1eGhQuZcSxjEoWWH4TEM1/G1a\
+vwskMaUS0zMrJnv/Sn0gw4J6wAH0AFxmIjJ1FYj/98E5BPnLfrFdppXzJsToVLFZPIf3R8j4LXCH/+C2\
+BwADAAAgJgtBgD4wNlDNMEpMhE9XvKjLjUvLo7LFMRd3abdVLxTzK47LWy///9mC4TAcAAyAGA00mQAk\
+awG3kbUP2tR/+d1sv47LxDHhgoBmEBABuDgj/g4gXB98AWG0wkhcwR9FqZ/xxeAAIAEwDVepNEPq//xx\
++FAAEA0AGAB4YAAgJAACAiAAIBgFANCmjQO0Z2wIU1ozz+xKAGhKAGoDDQmk8AnJpHjQoZIlJ/R/kAKA\
+IPB4fFHm4n8XE1C0HtAIKzQEjKF+cAOQjAWWwE6MX7PIqXqGEAAWAAECVQ8IAAiAAfAB5kR5i2A6yRRn\
+4QDubOAxJnfAZeeFIFUM9nEbXgEAcx7eIEZZf/hEQB3g4S8HCF+DkB8HRfAFjQyqDTBDTOczr8QDIceI\
+mOPhcyzoykQICAAIFCwABAMCAAEA0KACbL0HWMrjUADaEI2cD69bgQBvX3waAAawnAAaFR8MtngG6s22\
+gQCCf99hh2coAAcVYoeXin4AfS/9Czrv2G6nq/AAABr48EooiWTst4GCDDggEACAewaosw4ACxuMivMs\
+b/jxgQTAAOi+TTGvc8fMGYCFn/EBIaXAAAAAI0GaOE41CImUxMGPfQjghLbtvoRwUT2e+aW5oRwTadNI\
+kcvEAAAAN0GaVBuNWKi4KCEsYa+ojX5/GsR0WtYrhiF3wuuW9O1VlO5+OxJNZsviIyJ4axqlVQoTEhgf\
+f8AAAABKQZpg3Gpw1w2QMZZmfY/LUflv2lCXDBR/35I+WaoxLJMshmnafrEcMQXeWXtfxhr3OKeifrFc\
+EGNUqqIMt9ml95zNAqV+xq4MS+AAAAArQZqA3GrERMFBBjyhr+PtfvrEcEhY3K+tYjhsi/y/3zfyaMS6\
+xHBFm838wAAAAE5BmqBHGrERMMQxlkHv32/mGDVy+Y2fSdl1iuHMPst8wjUSHM7039YjhinZb4c/Mz3N\
+8+p0ETZfETT1BBgxVJRVER74rprwvYrSqn0cSYcAAAApQZrAVxqcNcFEY99x/3Zp/BJj/vhrFcEd9j8b\
+3NYjhfGqVVLM/5oNP34AAABFQZrgVxqxETDEYa/Pf/+Y2Py18usRw5JE99hGokmsNJvUOfrEcMR9l8MZ\
+ZBlvXhBudtmqJdYjhfGqVVB+NQZb+Z/FPDulAAAAHEGbAHcasRE1fWI4JLj7L52sR1bWI4JJMJeAT4AA\
+AAApQZsgJcanDXDFJ8+fLuTfrFcEk9s9zWI+sVwvm83Jc6QYuPy3mYnCfYA=";
+
+/// Ensures `sample_64x64_10frames.mp4` exists in `tests/fixtures/` and returns its `PathBuf`.
+pub fn ensure_sample_mp4() -> std::path::PathBuf {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sample_64x64_10frames.mp4");
+
+    if !fixture_path.exists() {
+        if let Some(parent) = fixture_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let decoded = decode_simple_base64(SAMPLE_H264_MP4_BASE64);
+        std::fs::write(&fixture_path, decoded).expect("Failed to write sample_64x64_10frames.mp4 fixture");
+    }
+
+    fixture_path
+}
+
+fn decode_simple_base64(s: &str) -> Vec<u8> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity((s.len() * 3) / 4);
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+    for b in s.bytes() {
+        if b == b'=' || b.is_ascii_whitespace() {
+            continue;
+        }
+        if let Some(val) = TABLE.iter().position(|&x| x == b) {
+            buf = (buf << 6) | (val as u32);
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((buf >> bits) as u8);
+            }
+        }
+    }
+    out
 }

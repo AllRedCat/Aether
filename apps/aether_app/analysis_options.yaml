@@ -3,6 +3,7 @@ include: package:flutter_lints/flutter.yaml
 analyzer:
   exclude:
     - "lib/src/bridge/**"
+    - "rust_builder/**"
     - "**/*.g.dart"
     - "**/*.freezed.dart"
     - build/**

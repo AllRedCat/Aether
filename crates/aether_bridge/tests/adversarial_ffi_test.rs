@@ -1,5 +1,4 @@
-#[path = "../src/api.rs"]
-mod api;
+use aether_bridge::api;
 
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../theme/catppuccin.dart';
 import '../media_pool/media_pool_view.dart';
+import '../preview/preview_view.dart';
 import '../timeline/timeline_view.dart';
 
 class EditorScreen extends StatelessWidget {
@@ -36,7 +37,7 @@ class EditorScreen extends StatelessWidget {
                   child: _buildPanel(
                     title: "Preview",
                     icon: Icons.monitor_rounded,
-                    child: _buildDummyPreview(),
+                    child: const PreviewView(),
                   ),
                 ),
                 // Divisória sutil
@@ -105,49 +106,7 @@ class EditorScreen extends StatelessWidget {
     );
   }
 
-  // --- WIDGETS FAKES DE PRÉ-VISUALIZAÇÃO ---
-
-  Widget _buildDummyPreview() {
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
-        children: [
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.black, // O preview do vídeo deve ser preto absoluto
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: CatppuccinMocha.surface0),
-              ),
-              child: const Center(
-                child: Text(
-                  "Frame Visualizado da GPU",
-                  style: TextStyle(color: CatppuccinMocha.surface2),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          // Controles de Playback Fakes
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton(onPressed: () {}, icon: const Icon(Icons.skip_previous_rounded, color: CatppuccinMocha.text)),
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 8),
-                decoration: const BoxDecoration(
-                  color: CatppuccinMocha.surface0,
-                  shape: BoxShape.circle,
-                ),
-                child: IconButton(onPressed: () {}, icon: const Icon(Icons.play_arrow_rounded, color: CatppuccinMocha.text)),
-              ),
-              IconButton(onPressed: () {}, icon: const Icon(Icons.skip_next_rounded, color: CatppuccinMocha.text)),
-            ],
-          )
-        ],
-      ),
-    );
-  }
+  // --- WIDGETS DO INSPECTOR ---
 
   Widget _buildDummyInspector() {
     return Padding(

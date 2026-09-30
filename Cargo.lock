@@ -25,6 +25,7 @@ dependencies = [
  "aether_media",
  "aether_render",
  "flutter_rust_bridge",
+ "serde",
  "uuid",
 ]
 
@@ -43,6 +44,7 @@ version = "0.1.0"
 dependencies = [
  "aether_core",
  "bytes",
+ "cc",
  "image",
  "infer",
  "mp4",
