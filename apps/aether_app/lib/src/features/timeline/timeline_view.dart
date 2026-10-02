@@ -25,7 +25,8 @@ class TimelineView extends ConsumerWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: const BoxDecoration(
               color: CatppuccinMocha.mantle,
-              border: Border(bottom: BorderSide(color: CatppuccinMocha.surface0)),
+              border:
+                  Border(bottom: BorderSide(color: CatppuccinMocha.surface0)),
             ),
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -41,7 +42,9 @@ class TimelineView extends ConsumerWidget {
                           children: [
                             const Text(
                               'Clipes: ',
-                              style: TextStyle(color: CatppuccinMocha.subtext0, fontSize: 13),
+                              style: TextStyle(
+                                  color: CatppuccinMocha.subtext0,
+                                  fontSize: 13),
                             ),
                             Text(
                               '${state.totalClipCount}',
@@ -53,7 +56,10 @@ class TimelineView extends ConsumerWidget {
                               ),
                             ),
                             const SizedBox(width: 24),
-                            Container(width: 1, height: 16, color: CatppuccinMocha.surface1),
+                            Container(
+                                width: 1,
+                                height: 16,
+                                color: CatppuccinMocha.surface1),
                             const SizedBox(width: 24),
                             Text(
                               'Duration: ${state.durationPts} PTS',
@@ -68,27 +74,27 @@ class TimelineView extends ConsumerWidget {
                           ],
                         ),
                         const SizedBox(width: 16),
-                        ElevatedButton.icon(
-                          key: const Key('add_clip_button'),
-                          onPressed: state.isLoading
-                              ? null
-                              : () => ref.read(timelineProvider.notifier).addClip(),
-                          icon: state.isLoading
-                              ? const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: CatppuccinMocha.base),
-                                )
-                              : const Icon(Icons.add, size: 16),
-                          label: const Text('Adicionar Clipe', style: TextStyle(fontWeight: FontWeight.w600)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: CatppuccinMocha.mauve,
-                            foregroundColor: CatppuccinMocha.base,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          ),
-                        ),
+                        // ElevatedButton.icon(
+                        //   key: const Key('add_clip_button'),
+                        //   onPressed: state.isLoading
+                        //       ? null
+                        //       : () => ref.read(timelineProvider.notifier).addClip(),
+                        //   icon: state.isLoading
+                        //       ? const SizedBox(
+                        //           width: 14,
+                        //           height: 14,
+                        //           child: CircularProgressIndicator(strokeWidth: 2, color: CatppuccinMocha.base),
+                        //         )
+                        //       : const Icon(Icons.add, size: 16),
+                        //   label: const Text('Adicionar Clipe', style: TextStyle(fontWeight: FontWeight.w600)),
+                        //   style: ElevatedButton.styleFrom(
+                        //     backgroundColor: CatppuccinMocha.mauve,
+                        //     foregroundColor: CatppuccinMocha.base,
+                        //     elevation: 0,
+                        //     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                        //     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        //   ),
+                        // ),
                       ],
                     ),
                   ),
@@ -104,12 +110,16 @@ class TimelineView extends ConsumerWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Row(
                 children: [
-                  const Icon(Icons.error_outline, color: CatppuccinMocha.red, size: 18),
+                  const Icon(Icons.error_outline,
+                      color: CatppuccinMocha.red, size: 18),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       state.errorMessage!,
-                      style: const TextStyle(color: CatppuccinMocha.red, fontSize: 13, fontWeight: FontWeight.w500),
+                      style: const TextStyle(
+                          color: CatppuccinMocha.red,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500),
                     ),
                   ),
                 ],
@@ -125,7 +135,9 @@ class TimelineView extends ConsumerWidget {
                 ref.read(timelineSelectionProvider.notifier).clearSelection();
               },
               child: state.isLoading && state.timeline == null
-                  ? const Center(child: CircularProgressIndicator(color: CatppuccinMocha.mauve))
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                          color: CatppuccinMocha.mauve))
                   : state.tracks.isEmpty
                       ? const Center(
                           child: Text(
@@ -163,7 +175,7 @@ class TimelineView extends ConsumerWidget {
   ) {
     final isVideo = track.kind == TrackKind.video;
     final trackName = 'Track ${index + 1} (${track.kind.name.toUpperCase()})';
-    
+
     final trackColor = isVideo ? CatppuccinMocha.blue : CatppuccinMocha.green;
 
     return Container(
@@ -191,7 +203,8 @@ class TimelineView extends ConsumerWidget {
                     topLeft: Radius.circular(8),
                     bottomLeft: Radius.circular(8),
                   ),
-                  border: Border(right: BorderSide(color: CatppuccinMocha.surface0)),
+                  border: Border(
+                      right: BorderSide(color: CatppuccinMocha.surface0)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -200,7 +213,9 @@ class TimelineView extends ConsumerWidget {
                     Row(
                       children: [
                         Icon(
-                          isVideo ? Icons.videocam_rounded : Icons.audiotrack_rounded,
+                          isVideo
+                              ? Icons.videocam_rounded
+                              : Icons.audiotrack_rounded,
                           size: 16,
                           color: trackColor,
                         ),
@@ -220,7 +235,8 @@ class TimelineView extends ConsumerWidget {
                     const SizedBox(height: 4),
                     Text(
                       '${track.clips.length} clipe(s)',
-                      style: const TextStyle(color: CatppuccinMocha.overlay0, fontSize: 11),
+                      style: const TextStyle(
+                          color: CatppuccinMocha.overlay0, fontSize: 11),
                     ),
                   ],
                 ),
@@ -235,7 +251,8 @@ class TimelineView extends ConsumerWidget {
                   ref.read(timelineSelectionProvider.notifier).clearSelection();
                 },
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   child: track.clips.isEmpty
                       ? Container(
                           alignment: Alignment.centerLeft,
@@ -252,7 +269,8 @@ class TimelineView extends ConsumerWidget {
                           spacing: 4,
                           runSpacing: 4,
                           children: track.clips.map((clip) {
-                            final isSelected = selectionState.isClipSelected(clip.id);
+                            final isSelected =
+                                selectionState.isClipSelected(clip.id);
                             return _buildClipItem(
                               ref: ref,
                               track: track,
@@ -290,7 +308,8 @@ class TimelineView extends ConsumerWidget {
           borderRadius: BorderRadius.circular(6),
           border: isSelected
               ? Border.all(color: CatppuccinMocha.mauve, width: 2.0)
-              : Border.all(color: trackColor.withValues(alpha: 0.3), width: 1.0),
+              : Border.all(
+                  color: trackColor.withValues(alpha: 0.3), width: 1.0),
           boxShadow: isSelected
               ? [
                   BoxShadow(
@@ -305,7 +324,9 @@ class TimelineView extends ConsumerWidget {
           key: Key('timeline_clip_${clip.id}'),
           borderRadius: BorderRadius.circular(6),
           onTap: () {
-            ref.read(timelineSelectionProvider.notifier).selectClip(clip.id, track.id);
+            ref
+                .read(timelineSelectionProvider.notifier)
+                .selectClip(clip.id, track.id);
           },
           mouseCursor: SystemMouseCursors.click,
           hoverColor: trackColor.withValues(alpha: 0.12),
