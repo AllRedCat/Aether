@@ -46,13 +46,15 @@ class EditorScreen extends ConsumerWidget {
       backgroundColor: CatppuccinMocha.crust,
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final barWidth = constraints.maxWidth >= 520 ? constraints.maxWidth : 520.0;
+          final barWidth =
+              constraints.maxWidth >= 520 ? constraints.maxWidth : 520.0;
           return Column(
             children: [
               // 1. Workspace Presets Bar [AETHER | Edição | Cores | Áudio | Reset]
-              SizedBox(
+              Container(
                 height: 38,
                 width: constraints.maxWidth,
+                margin: const EdgeInsets.only(bottom: 4),
                 child: FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerLeft,
@@ -64,39 +66,46 @@ class EditorScreen extends ConsumerWidget {
                 ),
               ),
 
-          // 2. 2D Resizable Modular Workspace
-          Expanded(
-            child: ResizableSplitView(
-              axis: Axis.vertical,
-              ratio: layoutState.verticalRatio,
-              minFirstSize: 240.0,
-              minSecondSize: 120.0,
-              onRatioChanged: (ratio) => layoutNotifier.updateVerticalRatio(ratio),
-              onReset: () => layoutNotifier.resetToPresetDefaults(),
-              first: ResizableSplitView.multi(
-                dividerKeyPrefix: layoutState.preset == LayoutPreset.color ? 'top_' : null,
-                axis: Axis.horizontal,
-                weights: layoutState.topWeights,
-                minSizes: topMinSizes,
-                onWeightsChanged: (weights) => layoutNotifier.updateTopWeights(weights),
-                onReset: () => layoutNotifier.resetToPresetDefaults(),
-                children: topWidgets,
+              // 2. 2D Resizable Modular Workspace
+              Expanded( 
+                child: ResizableSplitView(
+                  axis: Axis.vertical,
+                  ratio: layoutState.verticalRatio,
+                  minFirstSize: 240.0,
+                  minSecondSize: 120.0,
+                  onRatioChanged: (ratio) =>
+                      layoutNotifier.updateVerticalRatio(ratio),
+                  onReset: () => layoutNotifier.resetToPresetDefaults(),
+                  first: ResizableSplitView.multi(
+                    dividerKeyPrefix: layoutState.preset == LayoutPreset.color
+                        ? 'top_'
+                        : null,
+                    axis: Axis.horizontal,
+                    weights: layoutState.topWeights,
+                    minSizes: topMinSizes,
+                    onWeightsChanged: (weights) =>
+                        layoutNotifier.updateTopWeights(weights),
+                    onReset: () => layoutNotifier.resetToPresetDefaults(),
+                    children: topWidgets,
+                  ),
+                  second: ResizableSplitView.multi(
+                    dividerKeyPrefix: layoutState.preset == LayoutPreset.color
+                        ? 'bottom_'
+                        : null,
+                    axis: Axis.horizontal,
+                    weights: layoutState.bottomWeights,
+                    minSizes: bottomMinSizes,
+                    onWeightsChanged: (weights) =>
+                        layoutNotifier.updateBottomWeights(weights),
+                    onReset: () => layoutNotifier.resetToPresetDefaults(),
+                    children: bottomWidgets,
+                  ),
+                ),
               ),
-              second: ResizableSplitView.multi(
-                dividerKeyPrefix: layoutState.preset == LayoutPreset.color ? 'bottom_' : null,
-                axis: Axis.horizontal,
-                weights: layoutState.bottomWeights,
-                minSizes: bottomMinSizes,
-                onWeightsChanged: (weights) => layoutNotifier.updateBottomWeights(weights),
-                onReset: () => layoutNotifier.resetToPresetDefaults(),
-                children: bottomWidgets,
-              ),
-            ),
-          ),
-        ],
-      );
-    },
-  ),
-);
+            ],
+          );
+        },
+      ),
+    );
   }
 }

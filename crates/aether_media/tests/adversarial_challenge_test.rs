@@ -556,12 +556,9 @@ fn test_adversarial_mp4_timescale_zero_panic_check() {
                 inspect_media_file(path_ts0.to_str().unwrap())
             }));
             assert!(res_ts0.is_ok(), "PANIC DETECTED: inspect_media_file panicked on MP4 with timescale = 0");
-            let inner = res_ts0.unwrap();
-            // On macOS, AVFoundation fallback may successfully inspect the file despite
-            // the corrupted timescale, which is acceptable behavior.
             assert!(
-                matches!(inner, Err(MediaError::CorruptFile(_)) | Err(MediaError::UnsupportedFormat(_)) | Ok(_)),
-                "Expected CorruptFile, UnsupportedFormat, or Ok (AVFoundation fallback) for MP4 with timescale = 0"
+                matches!(res_ts0.unwrap(), Err(MediaError::CorruptFile(_)) | Err(MediaError::UnsupportedFormat(_))),
+                "Expected CorruptFile or UnsupportedFormat for MP4 with timescale = 0"
             );
         }
     }
