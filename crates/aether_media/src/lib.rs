@@ -534,7 +534,6 @@ fn inspect_video(
     mp4_result
 }
 
-pub mod audio_peaks;
 pub mod decoder;
 
 pub use decoder::{

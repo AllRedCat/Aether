@@ -145,21 +145,6 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
           filePath: path,
         );
         updatedItems.add(mediaItem);
-
-        // Asynchronously generate audio peaks for waveform visualization
-        // if the media has audio channels and we have a valid project.
-        if (projectPath != null &&
-            (mediaItem.metadata.audioChannels ?? 0) > 0) {
-          generateAudioPeaks(
-            projectPath: projectPath!,
-            mediaId: mediaItem.id.uuid,
-            samplesPerPeak: 1000,
-          ).catchError((e) {
-            debugPrint(
-                'Failed to generate audio peaks for \${mediaItem.id.uuid}: \$e');
-            return '';
-          });
-        }
       } catch (e) {
         errors.add('$path: $e');
       }
