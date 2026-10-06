@@ -1,17 +1,14 @@
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/providers/project_provider.dart';
-
 import 'package:flutter/material.dart';
 import 'package:file_selector/file_selector.dart';
 import '../../theme/catppuccin.dart';
 import '../../bridge/api.dart';
 import '../editor/editor_screen.dart';
 
-class WelcomeScreen extends ConsumerWidget {
+class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: CatppuccinMocha.base,
       body: Row(
@@ -141,7 +138,7 @@ class WelcomeScreen extends ConsumerWidget {
                       title: "Novo Projeto",
                       subtitle: "Criar uma nova timeline de edição em branco",
                       color: CatppuccinMocha.mauve,
-                      onTap: () => _handleNewProject(context, ref),
+                      onTap: () => _handleNewProject(context),
                     ),
                     const SizedBox(height: 16),
                     _buildActionButton(
@@ -266,7 +263,7 @@ class WelcomeScreen extends ConsumerWidget {
       ),
     );
   }
-  Future<void> _handleNewProject(BuildContext context, WidgetRef ref) async {
+  Future<void> _handleNewProject(BuildContext context) async {
     // 1. Pede o nome do projeto usando um modal
     final TextEditingController nameController = TextEditingController();
     final String? projectName = await showDialog<String>(
@@ -338,8 +335,7 @@ class WelcomeScreen extends ConsumerWidget {
             ),
           ),
         );
-        // 4. Salva o projeto no provider global e vai para a Workspace de edição
-        ref.read(currentProjectProvider.notifier).state = project;
+        // 4. Vai para a Workspace de edição
         Navigator.push(context, MaterialPageRoute(builder: (_) => const EditorScreen()));
       }
     } catch (e) {
