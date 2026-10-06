@@ -5,6 +5,8 @@ import 'package:uuid/uuid.dart';
 import '../../bridge/api.dart';
 import '../../services/file_picker_service.dart';
 import '../timeline/timeline_provider.dart';
+import '../../core/providers/project_provider.dart';
+
 
 /// Immutable state representation for the Media Pool catalog.
 @immutable
@@ -202,11 +204,13 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
 final mediaPoolProvider =
     StateNotifierProvider<MediaPoolNotifier, MediaPoolState>((ref) {
   final filePicker = ref.watch(filePickerServiceProvider);
+  final project = ref.watch(currentProjectProvider);
 
   return MediaPoolNotifier(
     filePickerService: filePicker,
     importMediaFn: importMediaFile,
     getMediaItemsFn: getMediaItems,
+    projectPath: project?.projectPath,
     onAddToTimeline: (mediaItem) async {
       final timelineNotifier = ref.read(timelineProvider.notifier);
       var currentTimeline = ref.read(timelineProvider).timeline;

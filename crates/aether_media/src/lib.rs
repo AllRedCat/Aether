@@ -503,16 +503,6 @@ fn inspect_video(
                 let duration_pts = (duration_seconds * fps_ratio).round() as i64;
                 let fps_val = dec.fps();
 
-                let mut audio_channels = None;
-                let mut sample_rate = None;
-                if let Ok(symphonia_dec) = decoder::SymphoniaAudioDecoder::open(path_str) {
-                    let ch = symphonia_dec.channels() as u16;
-                    if ch > 0 {
-                        audio_channels = Some(ch);
-                        sample_rate = Some(symphonia_dec.sample_rate());
-                    }
-                }
-
                 return Ok(MediaInspection {
                     media_type: MediaType::Video,
                     width: Some(dec.width()),
@@ -521,8 +511,8 @@ fn inspect_video(
                     duration_pts,
                     timebase: Some(timebase),
                     fps: if fps_val > 0.0 { Some(fps_val) } else { None },
-                    audio_channels,
-                    sample_rate,
+                    audio_channels: None, // AVFoundation bridge currently only reads video track
+                    sample_rate: None,
                     file_size_bytes,
                     video_codec: Some("QuickTime".to_string()),
                     audio_codec: None,
