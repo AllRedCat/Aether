@@ -200,6 +200,37 @@ pub fn import_media_file(
     Ok(media_item)
 }
 
+/// Generates an audio waveform cache file (Peak Data) for a specific media item.
+/// The resulting `.aether_peaks` binary file is saved inside the project's `.aether_cache/peaks` directory.
+/// Returns the absolute path to the generated cache file.
+pub fn generate_audio_peaks(
+    project_path: String,
+    media_id: String,
+    samples_per_peak: u32,
+) -> Result<String, String> {
+    let project = Project::load(&project_path)
+        .map_err(|e| format!("Failed to load project: {}", e))?;
+    
+    let media_item = project
+        .media_pool
+        .items
+        .iter()
+        .find(|item| item.id.to_string() == media_id)
+        .ok_or_else(|| format!("Media item {} not found in project", media_id))?;
+        
+    let cache_dir = project.get_peaks_cache_dir()?;
+    let peak_file_path = cache_dir.join(format!("{}.aether_peaks", media_id));
+    let peak_file_str = peak_file_path.to_string_lossy().to_string();
+    
+    aether_media::audio_peaks::generate_waveform_cache(
+        &media_item.file_path,
+        &peak_file_str,
+        samples_per_peak,
+    )?;
+    
+    Ok(peak_file_str)
+}
+
 /// Standalone inspection of a media file without touching project persistence.
 pub fn inspect_media_file(file_path: String) -> Result<MediaItem, String> {
     import_media_file(None, file_path)

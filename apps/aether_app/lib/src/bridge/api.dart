@@ -51,6 +51,18 @@ Future<MediaItem> importMediaFile(
     RustLib.instance.api
         .crateApiImportMediaFile(projectPath: projectPath, filePath: filePath);
 
+/// Generates an audio waveform cache file (Peak Data) for a specific media item.
+/// The resulting `.aether_peaks` binary file is saved inside the project's `.aether_cache/peaks` directory.
+/// Returns the absolute path to the generated cache file.
+Future<String> generateAudioPeaks(
+        {required String projectPath,
+        required String mediaId,
+        required int samplesPerPeak}) =>
+    RustLib.instance.api.crateApiGenerateAudioPeaks(
+        projectPath: projectPath,
+        mediaId: mediaId,
+        samplesPerPeak: samplesPerPeak);
+
 /// Standalone inspection of a media file without touching project persistence.
 Future<MediaItem> inspectMediaFile({required String filePath}) =>
     RustLib.instance.api.crateApiInspectMediaFile(filePath: filePath);
