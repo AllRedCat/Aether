@@ -317,7 +317,7 @@ fn inspect_video(
     let file = File::open(path).map_err(|e| MediaError::IoError(e.to_string()))?;
     let reader = BufReader::new(file);
 
-    catch_unwind(AssertUnwindSafe(|| {
+    let mp4_result = catch_unwind(AssertUnwindSafe(|| {
         let mp4 = mp4::Mp4Reader::read_header(reader, file_size_bytes)
             .map_err(|e| MediaError::CorruptFile(format!("Invalid MP4/video header: {}", e)))?;
 
@@ -474,7 +474,64 @@ fn inspect_video(
             "Internal panic while parsing MP4 container".to_string()
         };
         Err(MediaError::CorruptFile(format!("MP4 parser panicked: {}", panic_msg)))
-    })
+    });
+
+    // If the pure-Rust mp4 crate succeeded, return the result.
+    if mp4_result.is_ok() {
+        return mp4_result;
+    }
+
+    // Fallback: on macOS, use AVFoundation to inspect containers that the mp4 crate can't parse
+    // (e.g., QuickTime .mov with proprietary Apple boxes).
+    #[cfg(target_os = "macos")]
+    {
+        let path_str = path.to_str().unwrap_or_default();
+        eprintln!(
+            "[aether_media] mp4 crate failed for '{}': {}. Falling back to AVFoundation.",
+            path_str,
+            mp4_result.as_ref().unwrap_err()
+        );
+
+        match decoder::AvFoundationVideoDecoder::open_with_timebase(path_str, timebase) {
+            Ok(dec) => {
+                let fps_ratio = if timebase.den != 0 {
+                    timebase.num as f64 / timebase.den as f64
+                } else {
+                    60.0
+                };
+                let duration_seconds = dec.duration_seconds();
+                let duration_pts = (duration_seconds * fps_ratio).round() as i64;
+                let fps_val = dec.fps();
+
+                return Ok(MediaInspection {
+                    media_type: MediaType::Video,
+                    width: Some(dec.width()),
+                    height: Some(dec.height()),
+                    duration_seconds,
+                    duration_pts,
+                    timebase: Some(timebase),
+                    fps: if fps_val > 0.0 { Some(fps_val) } else { None },
+                    audio_channels: None, // AVFoundation bridge currently only reads video track
+                    sample_rate: None,
+                    file_size_bytes,
+                    video_codec: Some("QuickTime".to_string()),
+                    audio_codec: None,
+                    pixel_format: Some("bgra".to_string()), // AVFoundation outputs BGRA
+                    is_vfr: None,       // Cannot determine without box-level parsing
+                    keyframe_pts: None, // Cannot extract without sample table access
+                });
+            }
+            Err(avf_err) => {
+                eprintln!(
+                    "[aether_media] AVFoundation fallback also failed for '{}': {}",
+                    path_str, avf_err
+                );
+            }
+        }
+    }
+
+    // Neither mp4 crate nor AVFoundation could handle it: return the original mp4 error.
+    mp4_result
 }
 
 pub mod decoder;
