@@ -121,3 +121,70 @@ fn save_peaks_binary(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_compute_min_max() {
+        let samples = vec![0.1, -0.5, 0.8, -0.2, 0.0];
+        let (min, max) = compute_min_max(&samples);
+        assert_eq!(min, -0.5);
+        assert_eq!(max, 0.8);
+    }
+
+    #[test]
+    fn test_save_peaks_binary() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.aether_peaks");
+        let path_str = file_path.to_str().unwrap();
+
+        let peaks = vec![
+            vec![( -0.5, 0.5 ), ( -0.8, 0.9 )], // Channel 0
+            vec![( -0.4, 0.4 ), ( -0.7, 0.8 )], // Channel 1
+        ];
+
+        let result = save_peaks_binary(path_str, 2, 44100, 1000, &peaks);
+        assert!(result.is_ok());
+
+        let metadata = fs::metadata(&file_path).unwrap();
+        assert!(metadata.len() > 0);
+    }
+
+    #[test]
+    fn test_audio_peaks_generation() {
+        use hound;
+        let dir = tempdir().unwrap();
+        
+        // 1. Create a synthetic wav file
+        let wav_path = dir.path().join("synthetic.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 44100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&wav_path, spec).unwrap();
+        for t in 0..44100 {
+            let sample = ( (t as f32 * 440.0 * 2.0 * std::f32::consts::PI / 44100.0).sin() * 10000.0 ) as i16;
+            writer.write_sample(sample).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        // 2. Run generate_waveform_cache
+        let output_path = dir.path().join("output.aether_peaks");
+        let result = generate_waveform_cache(
+            wav_path.to_str().unwrap(),
+            output_path.to_str().unwrap(),
+            1000,
+        );
+        
+        assert!(result.is_ok());
+
+        // 3. Verify output
+        let metadata = fs::metadata(&output_path).unwrap();
+        assert!(metadata.len() > 0);
+    }
+}

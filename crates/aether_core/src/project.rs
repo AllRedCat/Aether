@@ -58,6 +58,21 @@ impl Project {
         Ok(())
     }
 
+    /// Returns the absolute path to the project's media cache directory, creating it if necessary.
+    /// E.g. `/project_path/.aether_cache/peaks`
+    pub fn get_peaks_cache_dir(&self) -> Result<std::path::PathBuf, String> {
+        let cache_dir = Path::new(&self.project_path)
+            .join(".aether_cache")
+            .join("peaks");
+        
+        if !cache_dir.exists() {
+            fs::create_dir_all(&cache_dir)
+                .map_err(|e| format!("Falha ao criar pasta de cache: {}", e))?;
+        }
+        
+        Ok(cache_dir)
+    }
+
     /// Loads an existing project from disk from its .aether file path.
     pub fn load(file_path: &str) -> Result<Self, String> {
         let json_data = fs::read_to_string(file_path)
