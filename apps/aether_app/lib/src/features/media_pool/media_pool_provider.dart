@@ -142,7 +142,6 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
 
       try {
         final importFn = _importMediaFn ?? importMediaFile;
-        debugPrint('Importing media with projectPath: $projectPath');
         final mediaItem = await importFn(
           projectPath: projectPath,
           filePath: path,
@@ -211,7 +210,7 @@ final mediaPoolProvider =
     filePickerService: filePicker,
     importMediaFn: importMediaFile,
     getMediaItemsFn: getMediaItems,
-    projectPath: project?.filePath,
+    projectPath: project?.projectPath,
     onAddToTimeline: (mediaItem) async {
       final timelineNotifier = ref.read(timelineProvider.notifier);
       var currentTimeline = ref.read(timelineProvider).timeline;
