@@ -7,7 +7,6 @@ import '../../services/file_picker_service.dart';
 import '../timeline/timeline_provider.dart';
 import '../../core/providers/project_provider.dart';
 
-
 /// Immutable state representation for the Media Pool catalog.
 @immutable
 class MediaPoolState {
@@ -81,13 +80,19 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
     void Function(MediaItem item)? onAddToTimeline,
     this.projectPath,
     bool autoLoad = false,
+    List<MediaItem>? initialItems,
   })  : _filePickerService =
             filePickerService ?? const FileSelectorPickerService(),
         _importMediaFn = importMediaFn,
         _getMediaItemsFn = getMediaItemsFn,
         _onAddToTimeline = onAddToTimeline,
-        super(const MediaPoolState.initial()) {
-    if (autoLoad && projectPath != null && projectPath!.isNotEmpty) {
+        super(initialItems != null
+            ? MediaPoolState(items: initialItems)
+            : const MediaPoolState.initial()) {
+    if (autoLoad &&
+        initialItems == null &&
+        projectPath != null &&
+        projectPath!.isNotEmpty) {
       loadMediaPool();
     }
   }
@@ -142,6 +147,10 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
 
       try {
         final importFn = _importMediaFn ?? importMediaFile;
+        if (projectPath == null) {
+          debugPrint(
+              '[MediaPool] Nenhum projeto ativo: "$path" não será salvo no .aether');
+        }
         final mediaItem = await importFn(
           projectPath: projectPath,
           filePath: path,
@@ -158,7 +167,7 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
             samplesPerPeak: 1000,
           ).catchError((e) {
             debugPrint(
-                'Failed to generate audio peaks for \${mediaItem.id.uuid}: \$e');
+                '[MediaPool] Failed to generate audio peaks for ${mediaItem.id.uuid}: $e');
             return '';
           });
         }
@@ -210,7 +219,9 @@ final mediaPoolProvider =
     filePickerService: filePicker,
     importMediaFn: importMediaFile,
     getMediaItemsFn: getMediaItems,
-    projectPath: project?.projectPath,
+    // Rust's Project::load expects the .aether FILE path, not the folder.
+    projectPath: project?.filePath,
+    initialItems: project?.mediaPool.items,
     onAddToTimeline: (mediaItem) async {
       final timelineNotifier = ref.read(timelineProvider.notifier);
       var currentTimeline = ref.read(timelineProvider).timeline;

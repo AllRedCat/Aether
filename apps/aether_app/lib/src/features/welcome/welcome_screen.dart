@@ -3,12 +3,14 @@ import 'package:file_selector/file_selector.dart';
 import '../../theme/catppuccin.dart';
 import '../../bridge/api.dart';
 import '../editor/editor_screen.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/providers/project_provider.dart';
 
-class WelcomeScreen extends StatelessWidget {
+class WelcomeScreen extends ConsumerWidget {
   const WelcomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       backgroundColor: CatppuccinMocha.base,
       body: Row(
@@ -36,8 +38,10 @@ class WelcomeScreen extends StatelessWidget {
                   child: TextField(
                     decoration: InputDecoration(
                       hintText: "Buscar projetos...",
-                      hintStyle: const TextStyle(color: CatppuccinMocha.subtext0),
-                      prefixIcon: const Icon(Icons.search, color: CatppuccinMocha.subtext0, size: 20),
+                      hintStyle:
+                          const TextStyle(color: CatppuccinMocha.subtext0),
+                      prefixIcon: const Icon(Icons.search,
+                          color: CatppuccinMocha.subtext0, size: 20),
                       filled: true,
                       fillColor: CatppuccinMocha.surface0,
                       border: OutlineInputBorder(
@@ -56,6 +60,7 @@ class WelcomeScreen extends StatelessWidget {
                     children: [
                       _buildRecentProjectItem(
                         context,
+                        ref,
                         "Edição Casamento.aether",
                         "/Users/gabriel/Videos/Casamento",
                         "Ontem",
@@ -63,12 +68,14 @@ class WelcomeScreen extends StatelessWidget {
                       ),
                       _buildRecentProjectItem(
                         context,
+                        ref,
                         "Vlog Viagem Japão.aether",
                         "/Users/gabriel/Videos/Vlogs",
                         "Semana Passada",
                       ),
                       _buildRecentProjectItem(
                         context,
+                        ref,
                         "Clipe Banda.aether",
                         "/Users/gabriel/Videos/Banda",
                         "Há 2 semanas",
@@ -110,7 +117,8 @@ class WelcomeScreen extends StatelessWidget {
                           )
                         ],
                       ),
-                      child: const Icon(Icons.movie_creation_rounded, size: 50, color: CatppuccinMocha.base),
+                      child: const Icon(Icons.movie_creation_rounded,
+                          size: 50, color: CatppuccinMocha.base),
                     ),
                     const SizedBox(height: 32),
                     const Text(
@@ -138,15 +146,16 @@ class WelcomeScreen extends StatelessWidget {
                       title: "Novo Projeto",
                       subtitle: "Criar uma nova timeline de edição em branco",
                       color: CatppuccinMocha.mauve,
-                      onTap: () => _handleNewProject(context),
+                      onTap: () => _handleNewProject(context, ref),
                     ),
                     const SizedBox(height: 16),
                     _buildActionButton(
                       icon: Icons.folder_open_rounded,
                       title: "Abrir Projeto",
-                      subtitle: "Abrir um arquivo .aether existente no computador",
+                      subtitle:
+                          "Abrir um arquivo .aether existente no computador",
                       color: CatppuccinMocha.blue,
-                      onTap: () {},
+                      onTap: () => _handleOpenProject(context, ref),
                     ),
                   ],
                 ),
@@ -158,7 +167,9 @@ class WelcomeScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildRecentProjectItem(BuildContext context, String title, String path, String date, {bool isActive = false}) {
+  Widget _buildRecentProjectItem(BuildContext context, WidgetRef ref,
+      String title, String path, String date,
+      {bool isActive = false}) {
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
       decoration: BoxDecoration(
@@ -176,7 +187,8 @@ class WelcomeScreen extends StatelessWidget {
               color: CatppuccinMocha.surface1,
               borderRadius: BorderRadius.circular(6),
             ),
-            child: const Icon(Icons.video_library_rounded, color: CatppuccinMocha.mauve, size: 20),
+            child: const Icon(Icons.video_library_rounded,
+                color: CatppuccinMocha.mauve, size: 20),
           ),
           title: Text(
             title,
@@ -188,17 +200,19 @@ class WelcomeScreen extends StatelessWidget {
           ),
           subtitle: Text(
             path,
-            style: const TextStyle(color: CatppuccinMocha.subtext0, fontSize: 11),
+            style:
+                const TextStyle(color: CatppuccinMocha.subtext0, fontSize: 11),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
           trailing: Text(
             date,
-            style: const TextStyle(color: CatppuccinMocha.overlay0, fontSize: 11),
+            style:
+                const TextStyle(color: CatppuccinMocha.overlay0, fontSize: 11),
           ),
           onTap: () {
-            // Navega para o workspace de edição
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const EditorScreen()));
+            // Itens recentes ainda são mockups: tenta abrir '<path>/<title>'.
+            _openProjectFile(context, ref, '$path/$title');
           },
         ),
       ),
@@ -257,13 +271,15 @@ class WelcomeScreen extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right_rounded, color: CatppuccinMocha.overlay0),
+            const Icon(Icons.chevron_right_rounded,
+                color: CatppuccinMocha.overlay0),
           ],
         ),
       ),
     );
   }
-  Future<void> _handleNewProject(BuildContext context) async {
+
+  Future<void> _handleNewProject(BuildContext context, WidgetRef ref) async {
     // 1. Pede o nome do projeto usando um modal
     final TextEditingController nameController = TextEditingController();
     final String? projectName = await showDialog<String>(
@@ -271,8 +287,10 @@ class WelcomeScreen extends StatelessWidget {
       builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: CatppuccinMocha.base,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: const Text('Novo Projeto', style: TextStyle(color: CatppuccinMocha.text)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('Novo Projeto',
+              style: TextStyle(color: CatppuccinMocha.text)),
           content: TextField(
             controller: nameController,
             autofocus: true,
@@ -282,7 +300,9 @@ class WelcomeScreen extends StatelessWidget {
               hintStyle: const TextStyle(color: CatppuccinMocha.subtext0),
               filled: true,
               fillColor: CatppuccinMocha.surface0,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none),
             ),
             onSubmitted: (value) {
               if (value.trim().isNotEmpty) {
@@ -293,10 +313,13 @@ class WelcomeScreen extends StatelessWidget {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancelar', style: TextStyle(color: CatppuccinMocha.subtext0)),
+              child: const Text('Cancelar',
+                  style: TextStyle(color: CatppuccinMocha.subtext0)),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: CatppuccinMocha.mauve, foregroundColor: CatppuccinMocha.base),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: CatppuccinMocha.mauve,
+                  foregroundColor: CatppuccinMocha.base),
               onPressed: () {
                 if (nameController.text.trim().isNotEmpty) {
                   Navigator.pop(dialogContext, nameController.text.trim());
@@ -326,6 +349,8 @@ class WelcomeScreen extends StatelessWidget {
       );
 
       if (context.mounted) {
+        // Torna o projeto recém-criado o projeto ativo (sem isso nada é salvo no .aether).
+        ref.read(currentProjectProvider.notifier).state = project;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: CatppuccinMocha.green,
@@ -336,14 +361,45 @@ class WelcomeScreen extends StatelessWidget {
           ),
         );
         // 4. Vai para a Workspace de edição
-        Navigator.push(context, MaterialPageRoute(builder: (_) => const EditorScreen()));
+        Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const EditorScreen()));
       }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(backgroundColor: CatppuccinMocha.red, content: Text('Erro ao criar projeto: $e')),
+          SnackBar(
+              backgroundColor: CatppuccinMocha.red,
+              content: Text('Erro ao criar projeto: $e')),
         );
       }
     }
+  }
+
+  /// Loads a project from disk and makes it the active project.
+  Future<void> _openProjectFile(
+      BuildContext context, WidgetRef ref, String filePath) async {
+    try {
+      final project = await loadProject(filePath: filePath);
+      if (!context.mounted) return;
+      ref.read(currentProjectProvider.notifier).state = project;
+      Navigator.push(
+          context, MaterialPageRoute(builder: (_) => const EditorScreen()));
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              backgroundColor: CatppuccinMocha.red,
+              content: Text('Erro ao abrir projeto: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleOpenProject(BuildContext context, WidgetRef ref) async {
+    const typeGroup =
+        XTypeGroup(label: 'Aether Project', extensions: ['aether']);
+    final file = await openFile(acceptedTypeGroups: const [typeGroup]);
+    if (file == null || !context.mounted) return;
+    await _openProjectFile(context, ref, file.path);
   }
 }

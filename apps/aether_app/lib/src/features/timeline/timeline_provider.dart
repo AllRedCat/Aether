@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../bridge/api.dart';
+import '../../core/providers/project_provider.dart';
 
 /// Immutable state representation for the Aether Timeline.
 @immutable
@@ -112,10 +113,13 @@ class TimelineNotifier extends StateNotifier<TimelineState> {
       required int timelineIn,
     })? addClipToTrackFn,
     bool autoInit = true,
+    Timeline? initialTimeline,
   })  : _createTimelineFn = createTimelineFn,
         _addClipToTrackFn = addClipToTrackFn,
-        super(const TimelineState.initial()) {
-    if (autoInit) {
+        super(initialTimeline != null
+            ? TimelineState.fromTimeline(initialTimeline)
+            : const TimelineState.initial()) {
+    if (autoInit && initialTimeline == null) {
       initTimeline();
     }
   }
@@ -202,5 +206,6 @@ class TimelineNotifier extends StateNotifier<TimelineState> {
 /// Riverpod StateNotifierProvider for TimelineState.
 final timelineProvider =
     StateNotifierProvider<TimelineNotifier, TimelineState>((ref) {
-  return TimelineNotifier();
+  final project = ref.watch(currentProjectProvider);
+  return TimelineNotifier(initialTimeline: project?.timeline);
 });
