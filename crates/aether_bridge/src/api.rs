@@ -198,23 +198,30 @@ pub fn import_media_file(
         return Err(format!("Path is not a regular file: {}", file_path));
     }
 
-    let inspection = aether_media::inspect_media_file(&file_path)
-        .map_err(|e| format!("Failed to inspect media file '{}': {}", file_path, e))?;
-
-    let media_item = inspection.to_media_item(&file_path);
-
     if let Some(proj_path) = project_path {
         if !proj_path.trim().is_empty() {
             let mut project = Project::load(&proj_path)
                 .map_err(|e| format!("Failed to load project at '{}': {}", proj_path, e))?;
-            project.media_pool.items.push(media_item.clone());
+            let cache_mgr = aether_media::CacheManager::for_project(&project.project_path);
+            let ingested = aether_media::ingest_media_with_cache(
+                path,
+                project.timeline.timebase,
+                Some(&cache_mgr),
+            )
+            .map_err(|e| format!("Failed to inspect media file '{}': {}", file_path, e))?;
+
+            project.media_pool.items.push(ingested.media_item.clone());
             project
                 .save()
                 .map_err(|e| format!("Failed to save project after importing media: {}", e))?;
+            return Ok(ingested.media_item);
         }
     }
 
-    Ok(media_item)
+    let inspection = aether_media::inspect_media_file(&file_path)
+        .map_err(|e| format!("Failed to inspect media file '{}': {}", file_path, e))?;
+
+    Ok(inspection.to_media_item(&file_path))
 }
 
 /// Generates an audio waveform cache file (Peak Data) for a specific media item.

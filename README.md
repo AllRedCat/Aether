@@ -16,17 +16,22 @@ A arquitetura do projeto une o melhor de dois mundos: **Flutter** para uma inter
 
 ### 📁 Gestão de Projetos & Persistência
 - **Tela de Boas-Vindas (`WelcomeScreen`):** Criação e abertura de projetos com diálogo nativo de seleção de diretórios.
-- **Formato de Projeto Atômico (`.aether`):** Serialização e desserialização completa e não-destrutiva de timelines, trilhas, clipes e pool de ativos em JSON.
+- **Persistência Relacional Embarcada (`.aether` / SQLite):** Armazenamento transacional ACID via `rusqlite` (modo `WAL`) para metadados do projeto, catálogo de ativos (`media_assets`), trilhas (`timeline_tracks`) e clipes (`timeline_clips`), com migração transparente e retrocompatibilidade automática para arquivos `.aether` legados em JSON.
 - **Permissões Nativas de Sandbox:** Configuração completa de *entitlements* no macOS para acesso seguro ao sistema de arquivos do usuário.
 
-### 🎞️ Media Pool & Inspeção Avançada
-- **Importação de Ativos:** Suporte a arquivos de vídeo, áudio e imagens estáticas.
-- **Inspeção Técnica de Metadados:**
-  - Extração de resolução (largura x altura), duração em segundos e PTS, FPS e aspect ratio.
-  - Identificação de codecs de vídeo (ex: H.264/AVC) e áudio (ex: AAC, PCM).
-  - Taxa de amostragem de áudio, quantidade de canais e tamanho em bytes.
-  - **Detecção de Taxa de Quadros:** Diferenciação automática entre VFR (*Variable Frame Rate*) e CFR (*Constant Frame Rate*).
-  - **Indexação de Keyframes:** Extração de tabela de PTS de I-Frames para scrubbing e saltos temporais precisos.
+### 🎞️ Media Pool, Inspeção Profunda & Indexação Temporal Binária
+- **Importação de Ativos:** Suporte a arquivos de vídeo (`.mp4`, `.mov`, `.m4v`), áudio (`.wav`, `.mp3`, `.flac`, `.aac`, `.m4a`, `.ogg`) e imagens estáticas (`.png`, `.jpg`, `.webp`, `.bmp`, `.tiff`).
+- **Demuxing & Inspeção Profunda ISO-BMFF/QuickTime (`isobmff.rs`):**
+  - Parser nativo de átomos (`ftyp`, `moov`, `mvhd`, `trak`, `tkhd`, `mdia`, `mdhd`, `stbl`: `stsd`, `stts`, `ctts` v0/v1, `stss`, `sdtp`, `stsz`/`stz2`, `stsc`, `stco`/`co64`) sem necessidade de decodificar pixels.
+  - Extração de metadados descritivos e técnicos (`MediaTechInfo`): dimensões codificadas vs. exibição (`coded_width/height` e `display_width/height`), `bit_depth`, `pixel_format`, `track_timebase` racional, codecs de vídeo (`H.264`, `HEVC`, `VP9`, `AV1`, `ProRes`) e áudio (`AAC`, `ALAC`, `PCM`, `FLAC`, `Opus`, `MP3`), taxa de amostragem, contagem e layout de canais (`Mono`, `Stereo`, `5.1`, `7.1`).
+  - **Detecção de Taxa de Quadros:** Diferenciação automática entre VFR (*Variable Frame Rate*) e CFR (*Constant Frame Rate*) a partir da tabela `stts`.
+- **Índice Binário de Quadros e GOP (`frame_index.rs` — `.fidx`):**
+  - Layout binário fixo `#[repr(C)]` de **24 bytes** (`FrameIndexEntry`: `pts: i64`, `file_offset: u64`, `packet_size: u32`, `flags: u8` com bits `FLAG_IS_KEYFRAME` e `FLAG_IS_DISPOSABLE`, `_pad: [u8; 3]`).
+  - Persistido como arquivo binário plano contíguo (`cache/index/<key>.fidx`) com cabeçalho validado de 64 bytes (`AETHFIDX`).
+  - **Zero-Latency Seeking ($O(\log N)$):** Busca binária logarítmica sobre o índice contíguo para localizar instantaneamente (< 5ms mesmo em vídeos de 1h+ a 100fps) o I-Frame/IDR-Frame anterior mais próximo a qualquer timestamp de seek.
+- **Gerenciador de Cache Determinístico & Sidecars (`cache.rs` & `audio_peaks.rs`):**
+  - Chave determinística baseada em `SHA-256(SHA-256(primeiros_64KiB) + file_size + mtime)` com escrita atômica em disco.
+  - **Waveforms de Áudio (`audio_peaks.rs`):** Geração assíncrona em background de arquivos binários de picos (`min`/`max`) para arquivos de áudio e faixas de áudio de vídeos, sem bloquear a UI durante a importação.
 - **Inserção Direta na Timeline:** Adição ágil de mídias inspecionadas diretamente às trilhas de edição.
 
 ### 📺 Player de Pré-Visualização Nativo (Preview)
@@ -34,7 +39,7 @@ A arquitetura do projeto une o melhor de dois mundos: **Flutter** para uma inter
 - **Renderizador Otimizado (`RawImage`):** Decodificação em memória com correção de *stride* (`rowBytes`) para prevenir distorções e cisalhamentos diagonais.
 - **Controles de Reprodução:**
   - Reprodução sequencial na taxa de quadros nativa da mídia (Play/Pause).
-  - *Scrubbing* de baixa latência através de seek por PTS ou tempo fracionário em segundos.
+  - *Scrubbing* de baixa latência através de seek por PTS ou tempo fracionário em segundos, com identificação real de quadros-chave via `CMSampleAttachmentKey_NotSync` no AVFoundation.
   - Exibição de timecode reativo sincronizado com o playhead (PTS e formato `HH:MM:SS:FF`).
 
 ### ⏱️ Timeline Multi-trilha Não-Destrutiva
@@ -82,11 +87,12 @@ O Aether segue uma arquitetura em camadas desacopladas com fronteiras rígidas d
                     |                             |
                     v                             v
 +-----------------------------------+ +-----------------------------+
-|    Motor de Mídia & Decodificação | |      Motor de Domínio Core    |
+|    Motor de Mídia & Indexação     | |      Motor de Domínio Core    |
 |       (crates/aether_media)       | |     (crates/aether_core)      |
-| - Aceleração nativa (AVFoundation)| | - Timeline DAG, Tracks, Clips |
-| - Fallbacks de Áudio (Symphonia)  | | - Cálculo de PTS & Timebase   |
-| - Inspeção VFR/CFR e Keyframes    | | - Persistência (.aether JSON) |
+| - Demuxing ISO-BMFF/MOV (isobmff) | | - Timeline DAG, Tracks, Clips |
+| - Índice Binário #[repr(C)] (.fidx)| | - Cálculo de PTS & Timebase   |
+| - Cache SHA-256 & Waveforms (.peak)| | - Persistência SQLite + JSON  |
+| - Decodificação AVFoundation/Symph| | - Metadados Técnicos (TechInfo)|
 +-------------------+---------------+ +-----------------------------+
                     |
                     v
@@ -123,8 +129,8 @@ Aether/
 │       └── macos/                # Configurações de plataforma e Runner macOS
 │
 ├── crates/                       # Motores nativos em Rust
-│   ├── aether_core/              # Modelos de domínio: Timeline, Tracks, Clips, PTS, Project
-│   ├── aether_media/             # Decodificação de mídia, inspeção profunda, AVFoundation
+│   ├── aether_core/              # Domínio: Timeline, Tracks, Clips, MediaTechInfo, SQLite Store
+│   ├── aether_media/             # Demuxing ISO-BMFF, FrameIndex (.fidx), CacheManager, Peaks, AVFoundation
 │   ├── aether_render/            # Pipeline de renderização em GPU (wgpu)
 │   └── aether_bridge/            # Ponte FFI (endpoints públicos para o Flutter)
 │
@@ -143,8 +149,10 @@ Aether/
 O Aether conta com uma infraestrutura rigorosa de testes cobrindo múltiplos níveis:
 
 1. **Rust Core & Media Unit/Stress Tests:**
-   - Validação matemática de limites e saturação de inteiros (`i64::MAX`).
-   - Fuzzing de contêineres danificados, arquivos truncados e cabeçalhos corrompidos.
+   - Validação de layout binário `#[repr(C)]` de 24 bytes (`FrameIndexEntry`), serialização/desserialização `.fidx` e busca binária $O(\log N)$ com tolerância a limites (`pts < 0`, entre P/B-frames, `i64::MAX`, streams vazias e orçamento < 5ms).
+   - Verificação de fingerprinting determinístico (`partial_header + file_size + mtime`) contra vetores oficiais NIST SHA-256.
+   - Validação de persistência SQLite (`store.rs`) e migração automática de projetos JSON legados.
+   - Fuzzing de contêineres danificados, arquivos truncados, `timescale == 0` e cabeçalhos corrompidos sem `panic!`.
    - Testes de estresse de scrubbing aleatório, decodificação multithread e ausência de vazamento de memória.
 2. **Flutter Widget & Integration Tests:**
    - Testes de interação com a Timeline, seleção de clipes e propagação ao Inspector.

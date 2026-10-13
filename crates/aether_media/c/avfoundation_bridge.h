@@ -21,6 +21,7 @@ typedef struct {
     int32_t pts_timescale;
     int64_t duration_value;
     int32_t duration_timescale;
+    int32_t is_keyframe;
     uint8_t *data;
     size_t data_len;
 } AvfRawFrame;

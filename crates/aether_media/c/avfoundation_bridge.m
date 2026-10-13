@@ -52,6 +52,12 @@ void* avf_decoder_create(const char* file_path, AvfMediaInfo* out_info, char* er
         CGSize naturalSize = track.naturalSize;
         double fps = track.nominalFrameRate > 0.0 ? (double)track.nominalFrameRate : 30.0;
         CMTime duration = asset.duration;
+        if (duration.timescale <= 0 || track.naturalTimeScale <= 0) {
+            if (err_buf && err_len > 0) {
+                snprintf(err_buf, err_len, "Invalid container or track timescale (<= 0)");
+            }
+            return NULL;
+        }
         double durationSeconds = CMTimeGetSeconds(duration);
         if (isnan(durationSeconds) || durationSeconds < 0.0) {
             durationSeconds = 0.0;
@@ -114,6 +120,19 @@ int avf_decoder_next_frame(void* handle, AvfRawFrame* out_frame) {
 
         CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
         CMTime duration = CMSampleBufferGetDuration(sampleBuffer);
+
+        int32_t isKeyframe = 1;
+        CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, false);
+        if (attachments != NULL && CFArrayGetCount(attachments) > 0) {
+            CFDictionaryRef dict = (CFDictionaryRef)CFArrayGetValueAtIndex(attachments, 0);
+            if (dict != NULL) {
+                CFBooleanRef notSync = (CFBooleanRef)CFDictionaryGetValue(dict, kCMSampleAttachmentKey_NotSync);
+                if (notSync != NULL && CFBooleanGetValue(notSync)) {
+                    isKeyframe = 0;
+                }
+            }
+        }
+
         CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
         if (!imageBuffer) {
             CFRelease(sampleBuffer);
@@ -145,6 +164,7 @@ int avf_decoder_next_frame(void* handle, AvfRawFrame* out_frame) {
         out_frame->pts_timescale = pts.timescale;
         out_frame->duration_value = duration.value;
         out_frame->duration_timescale = duration.timescale;
+        out_frame->is_keyframe = isKeyframe;
         out_frame->data = copyData;
         out_frame->data_len = totalBytes;
 

@@ -192,6 +192,10 @@ fn inspect_image(
         .with_guessed_format()
         .map_err(|e| MediaError::UnsupportedFormat(format!("Failed to determine image format: {}", e)))?;
 
+    let container = reader
+        .format()
+        .map(|f| format!("{:?}", f).to_lowercase());
+
     let (width, height) = reader.into_dimensions()
         .map_err(|e| MediaError::CorruptFile(format!("Failed to read image dimensions: {}", e)))?;
 
@@ -202,6 +206,10 @@ fn inspect_image(
     };
     let duration_seconds = DEFAULT_IMAGE_DURATION_SECONDS;
     let duration_pts = (duration_seconds * fps_ratio).round() as i64;
+
+    let content_hash = cache::compute_source_fingerprint(path)
+        .map(|fp| fp.cache_key)
+        .unwrap_or_default();
 
     Ok(MediaInspection {
         media_type: MediaType::Image,
@@ -214,12 +222,35 @@ fn inspect_image(
         audio_channels: None,
         sample_rate: None,
         file_size_bytes,
-        video_codec: None,
+        video_codec: container.clone(),
         audio_codec: None,
-        pixel_format: None,
-        is_vfr: None,
-        keyframe_pts: None, tech: None,
+        pixel_format: Some("rgba8".to_string()),
+        is_vfr: Some(false),
+        keyframe_pts: None,
+        tech: Some(MediaTechInfo {
+            content_hash,
+            container,
+            coded_width: Some(width),
+            coded_height: Some(height),
+            display_width: Some(width),
+            display_height: Some(height),
+            bit_depth: Some(8),
+            track_timebase: Some(timebase),
+            channel_layout: None,
+            video_packet_count: Some(1),
+            keyframe_count: Some(1),
+        }),
     })
+}
+
+fn channel_layout_label(channels: u16) -> String {
+    match channels {
+        1 => "mono".to_string(),
+        2 => "stereo".to_string(),
+        6 => "5.1".to_string(),
+        8 => "7.1".to_string(),
+        n => format!("{}ch", n),
+    }
 }
 
 fn inspect_audio(
@@ -227,6 +258,10 @@ fn inspect_audio(
     file_size_bytes: u64,
     timebase: Rational,
 ) -> Result<MediaInspection, MediaError> {
+    use symphonia::core::codecs::{
+        CODEC_TYPE_AAC, CODEC_TYPE_ALAC, CODEC_TYPE_FLAC, CODEC_TYPE_MP3, CODEC_TYPE_NULL,
+        CODEC_TYPE_OPUS, CODEC_TYPE_VORBIS,
+    };
     use symphonia::core::formats::FormatOptions;
     use symphonia::core::io::MediaSourceStream;
     use symphonia::core::meta::MetadataOptions;
@@ -235,10 +270,18 @@ fn inspect_audio(
     let file = File::open(path).map_err(|e| MediaError::IoError(e.to_string()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
+    let ext_lower = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase());
     let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+    if let Some(ref ext) = ext_lower {
         hint.with_extension(ext);
     }
+
+    let content_hash = cache::compute_source_fingerprint(path)
+        .map(|fp| fp.cache_key)
+        .unwrap_or_default();
 
     catch_unwind(AssertUnwindSafe(|| {
         let probe_result = symphonia::default::get_probe()
@@ -248,7 +291,7 @@ fn inspect_audio(
         let format = probe_result.format;
         let track = format.default_track()
             .or_else(|| {
-                format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+                format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
             })
             .ok_or_else(|| MediaError::CorruptFile("No playable audio track found in file".to_string()))?;
 
@@ -262,6 +305,18 @@ fn inspect_audio(
         if let Some(0) = audio_channels {
             return Err(MediaError::CorruptFile("Audio channels cannot be zero".to_string()));
         }
+
+        let audio_codec = Some(match params.codec {
+            c if c == CODEC_TYPE_AAC => "AAC".to_string(),
+            c if c == CODEC_TYPE_MP3 => "MP3".to_string(),
+            c if c == CODEC_TYPE_FLAC => "FLAC".to_string(),
+            c if c == CODEC_TYPE_VORBIS => "Vorbis".to_string(),
+            c if c == CODEC_TYPE_OPUS => "Opus".to_string(),
+            c if c == CODEC_TYPE_ALAC => "ALAC".to_string(),
+            _ => "PCM".to_string(),
+        });
+
+        let bit_depth = params.bits_per_sample.and_then(|b| u8::try_from(b).ok());
 
         let duration_seconds = if let (Some(n_frames), Some(rate)) = (params.n_frames, params.sample_rate) {
             if rate > 0 {
@@ -295,10 +350,26 @@ fn inspect_audio(
             sample_rate,
             file_size_bytes,
             video_codec: None,
-            audio_codec: None, // Could sniff later from track codec, but keeping simple for now
+            audio_codec,
             pixel_format: None,
             is_vfr: None,
-            keyframe_pts: None, tech: None,
+            keyframe_pts: None,
+            tech: Some(MediaTechInfo {
+                content_hash,
+                container: ext_lower,
+                coded_width: None,
+                coded_height: None,
+                display_width: None,
+                display_height: None,
+                bit_depth,
+                track_timebase: sample_rate.map(|sr| Rational {
+                    num: (sr.min(i32::MAX as u32) as i32).max(1),
+                    den: 1,
+                }),
+                channel_layout: audio_channels.map(channel_layout_label),
+                video_packet_count: None,
+                keyframe_count: None,
+            }),
         })
     }))
     .unwrap_or_else(|payload| {
@@ -318,6 +389,129 @@ fn inspect_video(
     file_size_bytes: u64,
     timebase: Rational,
 ) -> Result<MediaInspection, MediaError> {
+    let fps_ratio = if timebase.den != 0 {
+        timebase.num as f64 / timebase.den as f64
+    } else {
+        60.0
+    };
+
+    let content_hash = cache::compute_source_fingerprint(path)
+        .map(|fp| fp.cache_key)
+        .unwrap_or_default();
+    let ext_lower = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase());
+
+    // 1. Run our tolerant ISO-BMFF (`mp4`/`mov`) box & sample-table parser first.
+    //    This handles QuickTime `.mov` files whose `mp4a` v1 audio boxes trip the `mp4` crate,
+    //    and strictly rejects corrupt `timescale == 0` headers.
+    let iso_result = catch_unwind(AssertUnwindSafe(|| isobmff::parse_isobmff_file(path)))
+        .unwrap_or_else(|_| {
+            Err(MediaError::CorruptFile(
+                "ISO-BMFF parser panicked".to_string(),
+            ))
+        });
+
+    // Fatal structural errors (e.g. `timescale is zero` or missing `moov`) must be
+    // rejected immediately and never masked by a platform decoder fallback.
+    if let Err(MediaError::CorruptFile(ref msg)) = iso_result {
+        if msg.contains("timescale is zero") || msg.contains("Missing 'moov'") {
+            return Err(MediaError::CorruptFile(msg.clone()));
+        }
+    }
+
+    if let Ok(ref iso) = iso_result {
+        if let Some(ref vt) = iso.video {
+            if vt.coded_width > 0 && vt.coded_height > 0 {
+                let mut duration_seconds = if vt.duration_seconds > 0.0 {
+                    vt.duration_seconds
+                } else {
+                    iso.duration_seconds
+                };
+
+                let mut audio_channels = iso.audio.as_ref().map(|a| a.channels);
+                let mut sample_rate = iso.audio.as_ref().map(|a| a.sample_rate);
+                let audio_codec = iso.audio.as_ref().map(|a| a.codec_name.clone());
+
+                // If the container audio stsd had no channel/rate info, probe with Symphonia.
+                if audio_channels.is_none() {
+                    if let Some(path_str) = path.to_str() {
+                        if let Ok(symphonia_dec) = decoder::SymphoniaAudioDecoder::open(path_str) {
+                            let ch = symphonia_dec.channels();
+                            if ch > 0 {
+                                audio_channels = Some(ch);
+                                sample_rate = Some(symphonia_dec.sample_rate());
+                            }
+                        }
+                    }
+                }
+
+                // If container duration is 0 (e.g. QuickTime movies with fragmented/edts timing),
+                // refine duration/fps via AVFoundation on macOS when available.
+                #[cfg(target_os = "macos")]
+                if duration_seconds <= 0.0 {
+                    if let Some(path_str) = path.to_str() {
+                        if let Ok(dec) =
+                            decoder::AvFoundationVideoDecoder::open_with_timebase(path_str, timebase)
+                        {
+                            if dec.duration_seconds() > 0.0 {
+                                duration_seconds = dec.duration_seconds();
+                            }
+                        }
+                    }
+                }
+
+                let duration_pts = (duration_seconds * fps_ratio).round() as i64;
+                let idx = vt.build_frame_index(timebase, [0u8; 32]);
+                let keyframe_pts: Vec<i64> = idx.keyframes().map(|e| e.pts).collect();
+
+                let container = iso
+                    .major_brand
+                    .as_deref()
+                    .map(|b| b.trim().to_string())
+                    .filter(|b| !b.is_empty())
+                    .or(ext_lower);
+
+                return Ok(MediaInspection {
+                    media_type: MediaType::Video,
+                    width: Some(vt.display_width),
+                    height: Some(vt.display_height),
+                    duration_seconds,
+                    duration_pts,
+                    timebase: Some(timebase),
+                    fps: vt.fps,
+                    audio_channels,
+                    sample_rate,
+                    file_size_bytes,
+                    video_codec: Some(vt.codec_name.clone()),
+                    audio_codec,
+                    pixel_format: Some(vt.pixel_format.clone()),
+                    is_vfr: Some(vt.is_vfr),
+                    keyframe_pts: Some(keyframe_pts),
+                    tech: Some(MediaTechInfo {
+                        content_hash,
+                        container,
+                        coded_width: Some(vt.coded_width),
+                        coded_height: Some(vt.coded_height),
+                        display_width: Some(vt.display_width),
+                        display_height: Some(vt.display_height),
+                        bit_depth: Some(vt.bit_depth),
+                        track_timebase: Some(Rational {
+                            num: (vt.timescale.min(i32::MAX as u32) as i32).max(1),
+                            den: 1,
+                        }),
+                        channel_layout: audio_channels.map(channel_layout_label),
+                        video_packet_count: u32::try_from(vt.packets.len()).ok(),
+                        keyframe_count: u32::try_from(vt.keyframe_count).ok(),
+                    }),
+                });
+            }
+        }
+    }
+
+    // 2. Fallback to the `mp4` crate for edge-case containers where `stsd` dimensions
+    //    were stored only in SPS/AVCC and not in the VisualSampleEntry header.
     let file = File::open(path).map_err(|e| MediaError::IoError(e.to_string()))?;
     let reader = BufReader::new(file);
 
@@ -325,23 +519,16 @@ fn inspect_video(
         let mp4 = mp4::Mp4Reader::read_header(reader, file_size_bytes)
             .map_err(|e| MediaError::CorruptFile(format!("Invalid MP4/video header: {}", e)))?;
 
-        // Guard against integer divide-by-zero panic in mp4.duration() (mp4::reader:145:31)
         if mp4.moov.mvhd.timescale == 0 {
             return Err(MediaError::CorruptFile("MP4 container timescale is zero".to_string()));
         }
 
         let duration_seconds = mp4.duration().as_secs_f64();
-        let fps_ratio = if timebase.den != 0 {
-            timebase.num as f64 / timebase.den as f64
-        } else {
-            60.0
-        };
         let duration_pts = (duration_seconds * fps_ratio).round() as i64;
 
         let video_track = mp4.tracks().values().find(|t| t.track_type().ok() == Some(mp4::TrackType::Video));
         let (width, height, fps) = match video_track {
             Some(vt) => {
-                // Guard against integer divide-by-zero panic in vt.frame_rate() -> vt.duration() (mp4::track:209:31)
                 if vt.timescale() == 0 {
                     return Err(MediaError::CorruptFile("Video track timescale is zero".to_string()));
                 }
@@ -369,87 +556,18 @@ fn inspect_video(
             None => (None, None),
         };
 
-        let video_codec = video_track.and_then(|vt| {
-            match vt.media_type().ok() {
-                Some(mp4::MediaType::H264) => Some("H.264".to_string()),
-                Some(mp4::MediaType::H265) => Some("HEVC".to_string()),
-                Some(mp4::MediaType::VP9) => Some("VP9".to_string()),
-                _ => Some("Unknown".to_string()),
-            }
+        let video_codec = video_track.and_then(|vt| match vt.media_type().ok() {
+            Some(mp4::MediaType::H264) => Some("H.264".to_string()),
+            Some(mp4::MediaType::H265) => Some("HEVC".to_string()),
+            Some(mp4::MediaType::VP9) => Some("VP9".to_string()),
+            _ => Some("Unknown".to_string()),
         });
 
-        let audio_codec = audio_track.and_then(|at| {
-            match at.media_type().ok() {
-                Some(mp4::MediaType::AAC) => Some("AAC".to_string()),
-                Some(mp4::MediaType::TTXT) => Some("Text".to_string()),
-                _ => Some("Unknown".to_string()),
-            }
+        let audio_codec = audio_track.and_then(|at| match at.media_type().ok() {
+            Some(mp4::MediaType::AAC) => Some("AAC".to_string()),
+            Some(mp4::MediaType::TTXT) => Some("Text".to_string()),
+            _ => Some("Unknown".to_string()),
         });
-
-        let pixel_format = video_track.and_then(|_vt| {
-            Some("yuv420p".to_string())
-        });
-
-        let (is_vfr, keyframe_pts) = match video_track {
-            Some(vt) => {
-                let stbl = &vt.trak.mdia.minf.stbl;
-                let mut detected_vfr = false;
-                
-                if stbl.stts.entries.len() > 1 {
-                    detected_vfr = true;
-                }
-
-                let mut kf_list: Vec<i64> = Vec::new();
-                let timescale = vt.timescale();
-                
-                let mut pts_by_sample_id = std::collections::HashMap::new();
-                let mut current_dts: u64 = 0;
-                let mut sample_id = 1u32;
-                
-                for entry in &stbl.stts.entries {
-                    for _ in 0..entry.sample_count {
-                        pts_by_sample_id.insert(sample_id, current_dts);
-                        current_dts += entry.sample_delta as u64;
-                        sample_id += 1;
-                    }
-                }
-                
-                if let Some(ctts) = &stbl.ctts {
-                    let mut sample_id = 1u32;
-                    for entry in &ctts.entries {
-                        for _ in 0..entry.sample_count {
-                            if let Some(pts) = pts_by_sample_id.get_mut(&sample_id) {
-                                *pts = (*pts as i64 + entry.sample_offset as i64).max(0) as u64;
-                            }
-                            sample_id += 1;
-                        }
-                    }
-                }
-                
-                if let Some(stss) = &stbl.stss {
-                    for &sync_sample_id in &stss.entries {
-                        if let Some(&pts) = pts_by_sample_id.get(&sync_sample_id) {
-                            let pts_seconds = pts as f64 / timescale as f64;
-                            let project_pts = (pts_seconds * fps_ratio).round() as i64;
-                            kf_list.push(project_pts);
-                        }
-                    }
-                } else {
-                    for sample_id in 1..pts_by_sample_id.len() as u32 + 1 {
-                        if let Some(&pts) = pts_by_sample_id.get(&sample_id) {
-                            let pts_seconds = pts as f64 / timescale as f64;
-                            let project_pts = (pts_seconds * fps_ratio).round() as i64;
-                            kf_list.push(project_pts);
-                        }
-                    }
-                }
-                
-                kf_list.sort_unstable();
-
-                (Some(detected_vfr), Some(kf_list))
-            },
-            None => (None, None),
-        };
 
         Ok(MediaInspection {
             media_type: MediaType::Video,
@@ -464,10 +582,22 @@ fn inspect_video(
             file_size_bytes,
             video_codec,
             audio_codec,
-            pixel_format,
-            is_vfr,
-            keyframe_pts,
-            tech: None,
+            pixel_format: video_track.map(|_| "yuv420p".to_string()),
+            is_vfr: Some(false),
+            keyframe_pts: Some(Vec::new()),
+            tech: Some(MediaTechInfo {
+                content_hash: content_hash.clone(),
+                container: ext_lower.clone(),
+                coded_width: width,
+                coded_height: height,
+                display_width: width,
+                display_height: height,
+                bit_depth: Some(8),
+                track_timebase: Some(timebase),
+                channel_layout: audio_channels.map(channel_layout_label),
+                video_packet_count: None,
+                keyframe_count: None,
+            }),
         })
     }))
     .unwrap_or_else(|payload| {
@@ -481,85 +611,99 @@ fn inspect_video(
         Err(MediaError::CorruptFile(format!("MP4 parser panicked: {}", panic_msg)))
     });
 
-    // If the pure-Rust mp4 crate succeeded, return the result.
     if mp4_result.is_ok() {
         return mp4_result;
     }
 
-    // Fallback: on macOS, use AVFoundation to inspect containers that the mp4 crate can't parse
-    // (e.g., QuickTime .mov with proprietary Apple boxes).
-    #[cfg(target_os = "macos")]
-    {
-        let path_str = path.to_str().unwrap_or_default();
-        eprintln!(
-            "[aether_media] mp4 crate failed for '{}': {}. Falling back to AVFoundation.",
-            path_str,
-            mp4_result.as_ref().unwrap_err()
-        );
-
-        match decoder::AvFoundationVideoDecoder::open_with_timebase(path_str, timebase) {
-            Ok(dec) => {
-                let fps_ratio = if timebase.den != 0 {
-                    timebase.num as f64 / timebase.den as f64
-                } else {
-                    60.0
-                };
-                let duration_seconds = dec.duration_seconds();
-                let duration_pts = (duration_seconds * fps_ratio).round() as i64;
-                let fps_val = dec.fps();
-
-                // The AVFoundation bridge only reads the video track, so probe the
-                // audio track with Symphonia to know whether waveform peaks can be generated.
-                let mut audio_channels = None;
-                let mut sample_rate = None;
-                if let Ok(symphonia_dec) = decoder::SymphoniaAudioDecoder::open(path_str) {
-                    let ch = symphonia_dec.channels() as u16;
-                    if ch > 0 {
-                        audio_channels = Some(ch);
-                        sample_rate = Some(symphonia_dec.sample_rate());
-                    }
-                }
-
-                return Ok(MediaInspection {
-                    media_type: MediaType::Video,
-                    width: Some(dec.width()),
-                    height: Some(dec.height()),
-                    duration_seconds,
-                    duration_pts,
-                    timebase: Some(timebase),
-                    fps: if fps_val > 0.0 { Some(fps_val) } else { None },
-                    audio_channels,
-                    sample_rate,
-                    file_size_bytes,
-                    video_codec: Some("QuickTime".to_string()),
-                    audio_codec: None,
-                    pixel_format: Some("bgra".to_string()), // AVFoundation outputs BGRA
-                    is_vfr: None,       // Cannot determine without box-level parsing
-                    keyframe_pts: None, tech: None, // Cannot extract without sample table access
-                });
-            }
-            Err(avf_err) => {
-                eprintln!(
-                    "[aether_media] AVFoundation fallback also failed for '{}': {}",
-                    path_str, avf_err
-                );
-            }
+    // Do not fall back to AVFoundation if the MP4 reader detected a zero timescale.
+    if let Err(MediaError::CorruptFile(ref msg)) = mp4_result {
+        if msg.contains("timescale is zero") {
+            return mp4_result;
         }
     }
 
-    // Neither mp4 crate nor AVFoundation could handle it: return the original mp4 error.
+    // 3. Last-resort fallback on macOS via AVFoundation for non-ISO-BMFF or heavily
+    //    proprietary QuickTime containers (e.g. compressed `cmov` headers).
+    #[cfg(target_os = "macos")]
+    {
+        let path_str = path.to_str().unwrap_or_default();
+        if let Ok(dec) = decoder::AvFoundationVideoDecoder::open_with_timebase(path_str, timebase) {
+            let duration_seconds = dec.duration_seconds();
+            let duration_pts = (duration_seconds * fps_ratio).round() as i64;
+            let fps_val = dec.fps();
+
+            let mut audio_channels = None;
+            let mut sample_rate = None;
+            if let Ok(symphonia_dec) = decoder::SymphoniaAudioDecoder::open(path_str) {
+                let ch = symphonia_dec.channels();
+                if ch > 0 {
+                    audio_channels = Some(ch);
+                    sample_rate = Some(symphonia_dec.sample_rate());
+                }
+            }
+
+            return Ok(MediaInspection {
+                media_type: MediaType::Video,
+                width: Some(dec.width()),
+                height: Some(dec.height()),
+                duration_seconds,
+                duration_pts,
+                timebase: Some(timebase),
+                fps: if fps_val > 0.0 { Some(fps_val) } else { None },
+                audio_channels,
+                sample_rate,
+                file_size_bytes,
+                video_codec: Some("QuickTime".to_string()),
+                audio_codec: None,
+                pixel_format: Some("bgra".to_string()),
+                is_vfr: None,
+                keyframe_pts: None,
+                tech: Some(MediaTechInfo {
+                    content_hash,
+                    container: ext_lower,
+                    coded_width: Some(dec.width()),
+                    coded_height: Some(dec.height()),
+                    display_width: Some(dec.width()),
+                    display_height: Some(dec.height()),
+                    bit_depth: Some(8),
+                    track_timebase: Some(dec.timebase()),
+                    channel_layout: audio_channels.map(channel_layout_label),
+                    video_packet_count: None,
+                    keyframe_count: None,
+                }),
+            });
+        }
+    }
+
     mp4_result
 }
 
 pub mod audio_peaks;
+pub mod cache;
 pub mod decoder;
+pub mod frame_index;
+pub mod importer;
+pub mod isobmff;
 
+pub use cache::{
+    compute_fingerprint_from_parts, compute_source_fingerprint, CacheManager, SourceFingerprint,
+    PARTIAL_HASH_WINDOW_BYTES,
+};
 pub use decoder::{
     open_audio_decoder, open_audio_decoder_with_timebase, open_media_decoder,
     open_media_decoder_with_timebase, open_video_decoder, open_video_decoder_with_timebase,
     AudioBuffer, AudioDecoder, AudioSampleFormat, CompositeMediaDecoder, DecoderError,
     DecoderResult, ImageSequenceDecoder, MediaDecoder, PixelFormat, SymphoniaAudioDecoder,
     SyntheticPattern, SyntheticVideoDecoder, VideoDecoder, VideoFrame,
+};
+pub use frame_index::{
+    binary_search_keyframe_at_or_before, binary_search_keyframe_clamped, decode_entries_raw,
+    encode_entries_raw, FrameIndex, FrameIndexEntry, FLAG_IS_DISPOSABLE, FLAG_IS_KEYFRAME,
+    FRAME_INDEX_ENTRY_SIZE, FRAME_INDEX_HEADER_SIZE, FRAME_INDEX_MAGIC, FRAME_INDEX_VERSION,
+};
+pub use importer::{
+    build_or_load_frame_index, build_or_load_frame_index_with_timebase, ingest_media_with_cache,
+    seek_nearest_keyframe, IngestedMedia,
 };
 
 #[cfg(target_os = "macos")]

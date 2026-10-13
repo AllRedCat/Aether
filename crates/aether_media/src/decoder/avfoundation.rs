@@ -27,6 +27,7 @@ mod native {
         pts_timescale: i32,
         duration_value: i64,
         duration_timescale: i32,
+        is_keyframe: i32,
         data: *mut u8,
         data_len: usize,
     }
@@ -212,7 +213,7 @@ mod native {
                         pts,
                         duration_pts,
                         timebase: self.timebase,
-                        is_keyframe: true,
+                        is_keyframe: raw.is_keyframe != 0,
                     };
                     frame.ensure_rgba8();
                     Ok(Some(frame))
