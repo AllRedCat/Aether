@@ -62,7 +62,7 @@ impl Project {
     /// E.g. `/project_path/.aether_cache/peaks`
     pub fn get_peaks_cache_dir(&self) -> Result<std::path::PathBuf, String> {
         let cache_dir = Path::new(&self.project_path)
-            .join(".aether_cache")
+            .join("cache")
             .join("peaks");
         
         if !cache_dir.exists() {
