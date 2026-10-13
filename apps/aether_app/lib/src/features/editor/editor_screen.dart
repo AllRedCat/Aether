@@ -36,10 +36,10 @@ class EditorScreen extends ConsumerWidget {
     }).toList();
 
     final topMinSizes = layoutState.topPanels
-        .map((id) => registry.maybeGet(id)?.minWidth ?? 120.0)
+        .map((id) => (registry.maybeGet(id)?.minWidth ?? 120.0) + 2.0)
         .toList();
     final bottomMinSizes = layoutState.bottomPanels
-        .map((id) => registry.maybeGet(id)?.minWidth ?? 120.0)
+        .map((id) => (registry.maybeGet(id)?.minWidth ?? 120.0) + 2.0)
         .toList();
 
     return Scaffold(

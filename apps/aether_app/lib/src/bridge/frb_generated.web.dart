@@ -35,6 +35,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       dynamic raw);
 
   @protected
+  RustStreamSink<ImportProgress> dco_decode_StreamSink_import_progress_Sse(
+      dynamic raw);
+
+  @protected
   RustStreamSink<PlaybackState> dco_decode_StreamSink_playback_state_Sse(
       dynamic raw);
 
@@ -43,6 +47,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   UuidValue dco_decode_Uuid(dynamic raw);
+
+  @protected
+  AudioPeak dco_decode_audio_peak(dynamic raw);
 
   @protected
   bool dco_decode_bool(dynamic raw);
@@ -84,6 +91,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Clip dco_decode_clip(dynamic raw);
 
   @protected
+  double dco_decode_f_32(dynamic raw);
+
+  @protected
   double dco_decode_f_64(dynamic raw);
 
   @protected
@@ -93,7 +103,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
+  ImportProgress dco_decode_import_progress(dynamic raw);
+
+  @protected
+  ImportStage dco_decode_import_stage(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_CastedPrimitive_i_64(dynamic raw);
+
+  @protected
+  List<AudioPeak> dco_decode_list_audio_peak(dynamic raw);
 
   @protected
   List<Clip> dco_decode_list_clip(dynamic raw);
@@ -106,6 +125,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<Track> dco_decode_list_track(dynamic raw);
+
+  @protected
+  MediaAssetMetadata dco_decode_media_asset_metadata(dynamic raw);
 
   @protected
   MediaItem dco_decode_media_item(dynamic raw);
@@ -202,6 +224,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  RustStreamSink<ImportProgress> sse_decode_StreamSink_import_progress_Sse(
+      SseDeserializer deserializer);
+
+  @protected
   RustStreamSink<PlaybackState> sse_decode_StreamSink_playback_state_Sse(
       SseDeserializer deserializer);
 
@@ -210,6 +236,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   UuidValue sse_decode_Uuid(SseDeserializer deserializer);
+
+  @protected
+  AudioPeak sse_decode_audio_peak(SseDeserializer deserializer);
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
@@ -252,6 +281,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Clip sse_decode_clip(SseDeserializer deserializer);
 
   @protected
+  double sse_decode_f_32(SseDeserializer deserializer);
+
+  @protected
   double sse_decode_f_64(SseDeserializer deserializer);
 
   @protected
@@ -261,7 +293,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
+  ImportProgress sse_decode_import_progress(SseDeserializer deserializer);
+
+  @protected
+  ImportStage sse_decode_import_stage(SseDeserializer deserializer);
+
+  @protected
   List<int> sse_decode_list_CastedPrimitive_i_64(SseDeserializer deserializer);
+
+  @protected
+  List<AudioPeak> sse_decode_list_audio_peak(SseDeserializer deserializer);
 
   @protected
   List<Clip> sse_decode_list_clip(SseDeserializer deserializer);
@@ -274,6 +315,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<Track> sse_decode_list_track(SseDeserializer deserializer);
+
+  @protected
+  MediaAssetMetadata sse_decode_media_asset_metadata(
+      SseDeserializer deserializer);
 
   @protected
   MediaItem sse_decode_media_item(SseDeserializer deserializer);
@@ -375,6 +420,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       RustStreamSink<BridgeFrame> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_StreamSink_import_progress_Sse(
+      RustStreamSink<ImportProgress> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_StreamSink_playback_state_Sse(
       RustStreamSink<PlaybackState> self, SseSerializer serializer);
 
@@ -383,6 +432,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_Uuid(UuidValue self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_audio_peak(AudioPeak self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
@@ -427,6 +479,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_clip(Clip self, SseSerializer serializer);
 
   @protected
+  void sse_encode_f_32(double self, SseSerializer serializer);
+
+  @protected
   void sse_encode_f_64(double self, SseSerializer serializer);
 
   @protected
@@ -436,8 +491,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
+  void sse_encode_import_progress(
+      ImportProgress self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_import_stage(ImportStage self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_CastedPrimitive_i_64(
       List<int> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_audio_peak(
+      List<AudioPeak> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_clip(List<Clip> self, SseSerializer serializer);
@@ -452,6 +518,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_track(List<Track> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_media_asset_metadata(
+      MediaAssetMetadata self, SseSerializer serializer);
 
   @protected
   void sse_encode_media_item(MediaItem self, SseSerializer serializer);

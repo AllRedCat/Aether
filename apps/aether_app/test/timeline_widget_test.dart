@@ -215,6 +215,19 @@ class FakeRustLibApi implements RustLibApi {
   }
 
   @override
+  Future<List<AudioPeak>> crateApiGetAudioWaveform({
+    required String assetId,
+    required int lod,
+  }) async {
+    return const [
+      AudioPeak(min: -0.8, max: 0.85, rms: 0.55),
+      AudioPeak(min: -0.4, max: 0.45, rms: 0.25),
+      AudioPeak(min: -0.95, max: 0.95, rms: 0.70),
+      AudioPeak(min: -0.2, max: 0.2, rms: 0.12),
+    ];
+  }
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -357,6 +370,79 @@ void main() {
       );
       expect(find.text('Duration: 60 PTS'), findsOneWidget);
       expect(find.text('Clip [0..60 PTS]'), findsOneWidget);
+    });
+
+    testWidgets(
+        'Renders audio waveform CustomPaint directly from FFI AudioPeak array',
+        (tester) async {
+      final trackId =
+          UuidValue.fromString('b0000000-0000-0000-0000-000000000002');
+      final clipId =
+          UuidValue.fromString('c0000000-0000-0000-0000-000000000099');
+      final sourceId =
+          UuidValue.fromString('d0000000-0000-0000-0000-000000000099');
+
+      final clip = Clip(
+        id: clipId,
+        sourceId: sourceId,
+        sourceIn: 0,
+        sourceOut: 120,
+        timelineIn: 0,
+        timelineOut: 120,
+      );
+
+      final notifier = MockTimelineNotifier(
+        TimelineState(
+          totalClipCount: 1,
+          durationPts: 120,
+          tracks: [
+            Track(id: trackId, kind: TrackKind.audio, clips: [clip]),
+          ],
+          isLoading: false,
+        ),
+      );
+
+      const expectedPeaks = [
+        AudioPeak(min: -0.9, max: 0.9, rms: 0.6),
+        AudioPeak(min: -0.5, max: 0.5, rms: 0.3),
+        AudioPeak(min: -0.75, max: 0.8, rms: 0.5),
+      ];
+
+      String? requestedAssetId;
+      int? requestedLod;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            timelineProvider.overrideWith((ref) => notifier),
+            audioWaveformFetcherProvider.overrideWithValue(
+                ({required String assetId, required int lod}) async {
+              requestedAssetId = assetId;
+              requestedLod = lod;
+              return expectedPeaks;
+            }),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(
+              body: TimelineView(),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      expect(requestedAssetId, equals(sourceId.toString()));
+      expect(requestedLod, equals(0));
+
+      final waveformFinder = find.byKey(Key('clip_waveform_$clipId'));
+      expect(waveformFinder, findsOneWidget);
+
+      final customPaint = tester.widget<CustomPaint>(waveformFinder);
+      final painter = customPaint.painter as AudioWaveformPainter;
+      expect(painter.peaks.length, equals(3));
+      expect(painter.peaks.first.max, closeTo(0.9, 1e-5));
+      expect(painter.peaks.first.rms, closeTo(0.6, 1e-5));
     });
 
     testWidgets('Shows error banner when errorMessage is present in state',

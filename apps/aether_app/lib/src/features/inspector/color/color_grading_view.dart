@@ -318,13 +318,16 @@ class ColorGradingControlsView extends ConsumerWidget {
 
           // Global Reset Button
           Center(
-            child: TextButton.icon(
-              key: const Key('reset_all_color'),
-              onPressed: () => notifier.resetClipGrading(clipId),
-              icon: const Icon(Icons.restart_alt_rounded, size: 15, color: CatppuccinMocha.red),
-              label: const Text(
-                'Redefinir Todas as Cores do Clipe',
-                style: TextStyle(color: CatppuccinMocha.red, fontSize: 12),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: TextButton.icon(
+                key: const Key('reset_all_color'),
+                onPressed: () => notifier.resetClipGrading(clipId),
+                icon: const Icon(Icons.restart_alt_rounded, size: 15, color: CatppuccinMocha.red),
+                label: const Text(
+                  'Redefinir Todas as Cores do Clipe',
+                  style: TextStyle(color: CatppuccinMocha.red, fontSize: 12),
+                ),
               ),
             ),
           ),

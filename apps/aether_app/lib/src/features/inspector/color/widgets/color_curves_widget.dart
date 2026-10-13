@@ -353,6 +353,7 @@ class ColorCurvesWidget extends StatefulWidget {
 
 class _ColorCurvesWidgetState extends State<ColorCurvesWidget> {
   int? _selectedPointIndex;
+  DateTime? _lastTapTime;
 
   void _setSelected(int? index) {
     setState(() => _selectedPointIndex = index);
@@ -390,6 +391,15 @@ class _ColorCurvesWidgetState extends State<ColorCurvesWidget> {
 
   void _handleTapDown(TapDownDetails details, Size size) {
     if (!widget.enabled) return;
+
+    final now = DateTime.now();
+    if (_lastTapTime != null &&
+        now.difference(_lastTapTime!) <= const Duration(milliseconds: 300)) {
+      _lastTapTime = null;
+      _handleDoubleTap();
+      return;
+    }
+    _lastTapTime = now;
 
     final hitIndex = _findNearestPoint(details.localPosition, size);
 
@@ -463,7 +473,6 @@ class _ColorCurvesWidgetState extends State<ColorCurvesWidget> {
           onTapDown: (details) => _handleTapDown(details, canvasSize),
           onPanStart: (details) => _handlePanStart(details, canvasSize),
           onPanUpdate: (details) => _handlePanUpdate(details, canvasSize),
-          onDoubleTap: _handleDoubleTap,
           child: SizedBox(
             width: width,
             height: height,

@@ -358,6 +358,8 @@ void main() {
         expect(initialLift.isZero, isTrue);
 
         // 1. Drag Lift chromatic disk crosshair
+        await tester.ensureVisible(find.byKey(const Key('chromatic_disk_lift')));
+        await tester.pumpAndSettle();
         await tester.drag(find.byKey(const Key('chromatic_disk_lift')), const Offset(25, -25));
         await tester.pumpAndSettle();
 
@@ -365,6 +367,8 @@ void main() {
         expect(draggedLift.radius, greaterThan(0.0));
 
         // 2. Drag Lift luminance slider
+        await tester.ensureVisible(find.byKey(const Key('slider_luma_lift')));
+        await tester.pumpAndSettle();
         await tester.drag(find.byKey(const Key('slider_luma_lift')), const Offset(30, 0));
         await tester.pumpAndSettle();
 
@@ -372,6 +376,8 @@ void main() {
         expect(lumaLift.luminance, greaterThan(0.0));
 
         // 3. Double-tap Lift chromatic disk to reset chromatic offset
+        await tester.ensureVisible(find.byKey(const Key('chromatic_disk_lift')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('chromatic_disk_lift')));
         await tester.pump(const Duration(milliseconds: 50));
         await tester.tap(find.byKey(const Key('chromatic_disk_lift')));
@@ -382,6 +388,8 @@ void main() {
         expect(resetOffsetLift.y, closeTo(0.0, 1e-4));
 
         // 4. Tap reset luminance icon button
+        await tester.ensureVisible(find.byKey(const Key('reset_luma_lift')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('reset_luma_lift')));
         await tester.pumpAndSettle();
 
@@ -409,6 +417,10 @@ void main() {
         // 1. Initial active channel is RGB
         expect(container.read(colorGradingProvider).gradingFor(videoClipId).activeCurveChannel, equals(CurveChannel.rgb));
 
+        // Scroll Tone Curves section into view
+        await tester.ensureVisible(find.byKey(const Key('reset_curve_channel')));
+        await tester.pumpAndSettle();
+
         // 2. Switch to Red channel
         await tester.tap(find.byKey(const Key('curve_channel_red')));
         await tester.pumpAndSettle();
@@ -433,6 +445,8 @@ void main() {
         final initialPointCount = container.read(colorGradingProvider).gradingFor(videoClipId).rgbCurvePoints.length;
         expect(initialPointCount, equals(2)); // default [(0,0), (1,1)]
 
+        await tester.ensureVisible(find.byKey(const Key('color_curves_widget')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('color_curves_widget')));
         await tester.pumpAndSettle();
 
@@ -443,6 +457,8 @@ void main() {
         expect(find.byKey(const Key('curve_point_info')), findsOneWidget);
 
         // 7. Reset active curve channel
+        await tester.ensureVisible(find.byKey(const Key('reset_curve_channel')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('reset_curve_channel')));
         await tester.pumpAndSettle();
 

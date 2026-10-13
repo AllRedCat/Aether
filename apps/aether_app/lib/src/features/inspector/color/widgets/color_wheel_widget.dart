@@ -389,19 +389,25 @@ class ColorWheelWidget extends StatelessWidget {
           const SizedBox(height: 10),
 
           // Chromatic Disk with Drag gestures & double-tap reset
-          GestureDetector(
-            key: diskKey,
-            onPanStart: (details) => _handlePan(details.localPosition, wheelDiameter),
-            onPanUpdate: (details) => _handlePan(details.localPosition, wheelDiameter),
-            onDoubleTap: onResetOffset,
-            child: SizedBox(
-              width: wheelDiameter,
-              height: wheelDiameter,
-              child: CustomPaint(
-                painter: ColorWheelPainter(
-                  x: x,
-                  y: y,
-                  accentColor: accentColor,
+          Listener(
+            onPointerMove: (event) =>
+                _handlePan(event.localPosition, wheelDiameter),
+            child: GestureDetector(
+              key: diskKey,
+              onPanStart: (details) =>
+                  _handlePan(details.localPosition, wheelDiameter),
+              onPanUpdate: (details) =>
+                  _handlePan(details.localPosition, wheelDiameter),
+              onDoubleTap: onResetOffset,
+              child: SizedBox(
+                width: wheelDiameter,
+                height: wheelDiameter,
+                child: CustomPaint(
+                  painter: ColorWheelPainter(
+                    x: x,
+                    y: y,
+                    accentColor: accentColor,
+                  ),
                 ),
               ),
             ),

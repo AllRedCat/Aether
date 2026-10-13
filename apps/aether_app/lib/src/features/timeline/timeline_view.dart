@@ -74,27 +74,39 @@ class TimelineView extends ConsumerWidget {
                           ],
                         ),
                         const SizedBox(width: 16),
-                        // ElevatedButton.icon(
-                        //   key: const Key('add_clip_button'),
-                        //   onPressed: state.isLoading
-                        //       ? null
-                        //       : () => ref.read(timelineProvider.notifier).addClip(),
-                        //   icon: state.isLoading
-                        //       ? const SizedBox(
-                        //           width: 14,
-                        //           height: 14,
-                        //           child: CircularProgressIndicator(strokeWidth: 2, color: CatppuccinMocha.base),
-                        //         )
-                        //       : const Icon(Icons.add, size: 16),
-                        //   label: const Text('Adicionar Clipe', style: TextStyle(fontWeight: FontWeight.w600)),
-                        //   style: ElevatedButton.styleFrom(
-                        //     backgroundColor: CatppuccinMocha.mauve,
-                        //     foregroundColor: CatppuccinMocha.base,
-                        //     elevation: 0,
-                        //     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                        //     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        //   ),
-                        // ),
+                        ElevatedButton.icon(
+                          key: const Key('add_clip_button'),
+                          onPressed: state.isLoading
+                              ? null
+                              : () =>
+                                  ref.read(timelineProvider.notifier).addClip(),
+                          icon: state.isLoading
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: CatppuccinMocha.base,
+                                  ),
+                                )
+                              : const Icon(Icons.add, size: 16),
+                          label: const Text(
+                            'Adicionar Clipe',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: CatppuccinMocha.mauve,
+                            foregroundColor: CatppuccinMocha.base,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -298,6 +310,15 @@ class TimelineView extends ConsumerWidget {
     required Color trackColor,
     required bool isSelected,
   }) {
+    final isAudioTrack = track.kind == TrackKind.audio;
+    final waveformAsync = ref.watch(
+      clipWaveformProvider(
+        WaveformQuery(assetId: clip.sourceId.uuid, lod: 0),
+      ),
+    );
+    final peaks = waveformAsync.valueOrNull ?? const <AudioPeak>[];
+    final showWaveform = isAudioTrack || peaks.isNotEmpty;
+
     return Material(
       color: Colors.transparent,
       child: Ink(
@@ -336,29 +357,143 @@ class TimelineView extends ConsumerWidget {
             padding: isSelected
                 ? const EdgeInsets.symmetric(horizontal: 7, vertical: 7)
                 : const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-            child: Row(
+            child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  isVideo ? Icons.movie_rounded : Icons.graphic_eq_rounded,
-                  size: 12,
-                  color: isSelected ? CatppuccinMocha.mauve : trackColor,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isVideo ? Icons.movie_rounded : Icons.graphic_eq_rounded,
+                      size: 12,
+                      color: isSelected ? CatppuccinMocha.mauve : trackColor,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Clip [${clip.timelineIn}..${clip.timelineOut} PTS]',
+                      style: TextStyle(
+                        color: isSelected ? CatppuccinMocha.text : trackColor,
+                        fontSize: 11,
+                        fontWeight:
+                            isSelected ? FontWeight.bold : FontWeight.w600,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 6),
-                Text(
-                  'Clip [${clip.timelineIn}..${clip.timelineOut} PTS]',
-                  style: TextStyle(
-                    color: isSelected ? CatppuccinMocha.text : trackColor,
-                    fontSize: 11,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                    fontFamily: 'monospace',
+                if (showWaveform) ...[
+                  const SizedBox(height: 4),
+                  SizedBox(
+                    width: 110,
+                    height: 20,
+                    child: CustomPaint(
+                      key: Key('clip_waveform_${clip.id}'),
+                      painter: AudioWaveformPainter(
+                        peaks: peaks,
+                        waveColor: isSelected
+                            ? CatppuccinMocha.mauve
+                            : trackColor.withValues(alpha: 0.85),
+                        rmsColor: CatppuccinMocha.teal,
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),
         ),
       ),
     );
+  }
+}
+
+/// CustomPainter that renders an audio waveform directly from the pre-computed
+/// `List<AudioPeak>` (`min`, `max`, `rms`) returned by the Rust `.peak` sidecar
+/// cache over FFI, without reading or decoding the original audio file.
+class AudioWaveformPainter extends CustomPainter {
+  final List<AudioPeak> peaks;
+  final Color waveColor;
+  final Color rmsColor;
+
+  const AudioWaveformPainter({
+    required this.peaks,
+    required this.waveColor,
+    required this.rmsColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+
+    final midY = size.height / 2.0;
+    final halfH = size.height / 2.0;
+
+    final baselinePaint = Paint()
+      ..color = waveColor.withValues(alpha: 0.25)
+      ..strokeWidth = 1.0;
+    canvas.drawLine(
+      Offset(0, midY),
+      Offset(size.width, midY),
+      baselinePaint,
+    );
+
+    if (peaks.isEmpty) return;
+
+    final peakPaint = Paint()
+      ..color = waveColor
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+
+    final rmsPaint = Paint()
+      ..color = rmsColor.withValues(alpha: 0.9)
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+
+    final columns = size.width.floor().clamp(1, 512);
+    final binsPerCol = peaks.length / columns;
+
+    for (int col = 0; col < columns; col++) {
+      final startBin = (col * binsPerCol).floor().clamp(0, peaks.length - 1);
+      final endBin =
+          (((col + 1) * binsPerCol).ceil()).clamp(startBin + 1, peaks.length);
+
+      double minVal = 1.0;
+      double maxVal = -1.0;
+      double rmsSum = 0.0;
+      int count = 0;
+
+      for (int i = startBin; i < endBin; i++) {
+        final p = peaks[i];
+        if (p.min < minVal) minVal = p.min;
+        if (p.max > maxVal) maxVal = p.max;
+        rmsSum += p.rms.abs();
+        count++;
+      }
+
+      minVal = minVal.clamp(-1.0, 1.0);
+      maxVal = maxVal.clamp(-1.0, 1.0);
+      final rmsVal = count > 0 ? (rmsSum / count).clamp(0.0, 1.0) : 0.0;
+
+      final x = (col + 0.5) * (size.width / columns);
+      final topY = (midY - (maxVal * halfH)).clamp(0.0, size.height);
+      final bottomY = (midY - (minVal * halfH)).clamp(0.0, size.height);
+
+      canvas.drawLine(Offset(x, topY), Offset(x, bottomY), peakPaint);
+
+      if (rmsVal > 0.0) {
+        final rmsTopY = (midY - (rmsVal * halfH)).clamp(0.0, size.height);
+        final rmsBottomY = (midY + (rmsVal * halfH)).clamp(0.0, size.height);
+        canvas.drawLine(Offset(x, rmsTopY), Offset(x, rmsBottomY), rmsPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant AudioWaveformPainter oldDelegate) {
+    return !identical(oldDelegate.peaks, peaks) ||
+        oldDelegate.peaks.length != peaks.length ||
+        oldDelegate.waveColor != waveColor ||
+        oldDelegate.rmsColor != rmsColor;
   }
 }

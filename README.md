@@ -38,6 +38,9 @@ A arquitetura do projeto une o melhor de dois mundos: **Flutter** para uma inter
   - **Miniaturas da Timeline / Filmstrips (`thumbnails.rs` — `.atlas` / `AETHTHMB`):**
     - Worker assíncrono em background (`spawn_thumbnail_filmstrip_worker`) para extração de miniaturas em baixa resolução (`160×90` em **JPEG** ou **WebP**) baseadas nos **I-Frames/IDR-Frames** do índice `.fidx` ou em intervalos fixos de tempo/PTS.
     - Sequência binária indexada com tabela `ThumbnailIndexEntry` (`#[repr(C)]` de 24 bytes: `pts`, `byte_offset`, `byte_len`, `grid_col`, `grid_row`), busca binária $O(\log N)$ por timestamp (`PTS -> offset`), coordenadas UV normalizadas e exportação de spritesheet/atlas único.
+- **Telemetria Assíncrona de Indexação na UI (`subscribe_import_progress` / `ImportProgress`):**
+  - Emissão contínua e não-bloqueante de eventos via `StreamSink<ImportProgress>` (`Inspecting`, `IndexingFrames`, `GeneratingWaveform`, `GeneratingThumbnails`, `Completed`, `Failed`) conectada ao `MediaPoolNotifier`.
+  - Exibição de banner global de progresso e indicadores visuais individuais em cada cartão do `MediaPoolView` enquanto os caches `.fidx`, `.peak` e filmstrips são processados em background.
 - **Inserção Direta na Timeline:** Adição ágil de mídias inspecionadas diretamente às trilhas de edição.
 
 ### 📺 Player de Pré-Visualização Nativo (Preview)
@@ -48,8 +51,11 @@ A arquitetura do projeto une o melhor de dois mundos: **Flutter** para uma inter
   - *Scrubbing* de baixa latência através de seek por PTS ou tempo fracionário em segundos, com identificação real de quadros-chave via `CMSampleAttachmentKey_NotSync` no AVFoundation.
   - Exibição de timecode reativo sincronizado com o playhead (PTS e formato `HH:MM:SS:FF`).
 
-### ⏱️ Timeline Multi-trilha Não-Destrutiva
+### ⏱️ Timeline Multi-trilha Não-Destrutiva & Formas de Onda FFI
 - **Suporte Multi-trilha:** Trilhas dedicadas para Vídeo, Áudio e Sobreposições (*Overlay*).
+- **Renderização Direta de Formas de Onda (`AudioWaveformPainter` & `get_audio_waveform`):**
+  - Desenho de alta performance da envoltória de pico (`min`/`max`) e energia média (`rms`) diretamente nos clipes da `TimelineView` via `CustomPainter`, consumindo o array `List<AudioPeak>` retornado pela ponte FFI a partir do sidecar binário `.peak` (por nível `lod`), sem ler ou decodificar o arquivo de áudio original na thread de UI.
+  - Revalidação reativa automática (`clipWaveformProvider`) assim que o worker assíncrono em background finaliza a geração do cache de waveform.
 - **Base de Tempo Racional (`Rational`):** Controle preciso de tempo baseado em frações matemáticas (numerador/denominador), prevenindo desvios cumulativos de arredondamento.
 - **Recálculo Dinâmico de Duração:** Atualização automática do PTS total da timeline com base nos limites e posições dos clipes inseridos.
 - **Validação Matemática de Limites:** Tratamento de erros robusto contra clipes invertidos, durações nulas e sobreposições ilegais.
@@ -82,13 +88,15 @@ O Aether segue uma arquitetura em camadas desacopladas com fronteiras rígidas d
 +-------------------------------------------------------------------+
 |               Camada de Estado Reativo (Riverpod 2.x)              |
 |  - ProjectState, TimelineNotifier, PreviewProvider, InspectorState |
+|  - MediaPoolNotifier (ImportProgress stream), clipWaveformProvider |
 +---------------------------------+---------------------------------+
                                   |
                                   v (Ponte FFI tipada e Streams)
 +-------------------------------------------------------------------+
 |               Fronteira FFI (crates/aether_bridge)                |
-|  - flutter_rust_bridge v2 codegen, tipos espelhados, StreamSinks  |
-|  - Gerenciador de Sessões de Reprodução (SessionRegistry)         |
+|  - flutter_rust_bridge v2: import_media, get_audio_waveform       |
+|  - StreamSinks: subscribe_import_progress, preview frames/state   |
+|  - Registros Ativos: SessionRegistry, AssetRegistry               |
 +-------------------+-----------------------------+-----------------+
                     |                             |
                     v                             v
@@ -154,17 +162,19 @@ Aether/
 
 O Aether conta com uma infraestrutura rigorosa de testes cobrindo múltiplos níveis:
 
-1. **Rust Core & Media Unit/Stress Tests:**
+1. **Rust Core, Media & Bridge Unit/Stress Tests:**
    - Validação de layout binário `#[repr(C)]` de 24 bytes (`FrameIndexEntry` e `ThumbnailIndexEntry`), serialização/desserialização `.fidx` e `.atlas`, e busca binária $O(\log N)$ com tolerância a limites (`pts < 0`, entre P/B-frames, `i64::MAX`, streams vazias e orçamento < 5ms).
    - Testes de cálculo de picos de áudio (`min`, `max`, `rms`) com buffers PCM sintéticos (silêncio, onda senoidal pura com $\text{RMS} = 1/\sqrt{2}$, clipping em amplitude máxima e resistência a `NaN`/`Inf`), geração de pirâmide multi-LOD e leitura seletiva por nível.
+   - Validação dos contratos FFI (`import_media` e `get_audio_waveform` através de múltiplos níveis LOD) em `aether_bridge`.
    - Testes de extração assíncrona de filmstrips (`160×90` JPEG/WebP), montagem de spritesheet e lookup por timestamp.
    - Verificação de fingerprinting determinístico (`partial_header + file_size + mtime`) contra vetores oficiais NIST SHA-256.
    - Validação de persistência SQLite (`store.rs`) e migração automática de projetos JSON legados.
    - Fuzzing de contêineres danificados, arquivos truncados, `timescale == 0` e cabeçalhos corrompidos sem `panic!`.
    - Testes de estresse de scrubbing aleatório, decodificação multithread e ausência de vazamento de memória.
-2. **Flutter Widget & Integration Tests:**
-   - Testes de interação com a Timeline, seleção de clipes e propagação ao Inspector.
-   - Validação de renderização de painéis em resoluções e restrições extremas.
+2. **Flutter Widget & Integration Tests (179 testes):**
+   - Testes de interação com a Timeline, renderização direta de waveforms via `AudioWaveformPainter` a partir de arrays `AudioPeak` da FFI, seleção de clipes e propagação ao Inspector.
+   - Testes de indicadores visuais não-bloqueantes de progresso de indexação (`ImportProgress` stream) no `MediaPoolView`.
+   - Validação de renderização de painéis e divisores (`ResizableSplitView`) em resoluções e restrições extremas (incluindo viewports de 200px).
    - Testes de estabilidade do Media Pool e montagem/desmontagem de instâncias de pré-visualização.
 3. **Suíte End-to-End (E2E) Automatizada:**
    - Orquestrador em Python (`tests/run_tests.sh`) que valida os contratos de FFI, integridade de serialização e execução das ferramentas de análise estática.

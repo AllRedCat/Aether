@@ -161,6 +161,9 @@ class MediaPoolView extends ConsumerWidget {
               valueColor: AlwaysStoppedAnimation<Color>(CatppuccinMocha.mauve),
             ),
 
+          // Non-blocking Background Indexing & Cache Generation Indicator
+          if (state.isIndexing) _buildIndexingBanner(state),
+
           // Error Banner
           if (state.errorMessage != null)
             Container(
@@ -194,6 +197,73 @@ class MediaPoolView extends ConsumerWidget {
             child: state.items.isEmpty && !state.isLoading
                 ? _buildEmptyState(context, notifier)
                 : _buildMediaList(context, state, notifier),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIndexingBanner(MediaPoolState state) {
+    final activeTasks = state.activeIndexingTasks;
+    final progressValue = state.overallIndexingProgress ?? 0.0;
+    final percent = (progressValue.clamp(0.0, 1.0) * 100).round();
+    final primaryTask = activeTasks.isNotEmpty ? activeTasks.first : null;
+    final label = primaryTask != null && primaryTask.message.isNotEmpty
+        ? primaryTask.message
+        : 'Indexando cache de mídia...';
+
+    return Container(
+      key: const Key('media_pool_indexing_banner'),
+      color: CatppuccinMocha.surface0.withValues(alpha: 0.45),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Row(
+              children: [
+                const SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: CatppuccinMocha.teal,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: CatppuccinMocha.subtext1,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '$percent%',
+                  key: const Key('media_pool_indexing_percent'),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w600,
+                    color: CatppuccinMocha.teal,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          LinearProgressIndicator(
+            key: const Key('media_pool_indexing_progress_bar'),
+            value: progressValue.clamp(0.0, 1.0),
+            minHeight: 2,
+            backgroundColor: CatppuccinMocha.surface0,
+            valueColor:
+                const AlwaysStoppedAnimation<Color>(CatppuccinMocha.teal),
           ),
         ],
       ),
@@ -283,8 +353,15 @@ class MediaPoolView extends ConsumerWidget {
       itemBuilder: (context, index) {
         final item = state.items[index];
         final isSelected = state.selectedItemId == item.id;
+        final itemProgress = state.progressForItem(item.id);
 
-        return _buildMediaItemCard(context, item, isSelected, notifier);
+        return _buildMediaItemCard(
+          context,
+          item,
+          isSelected,
+          notifier,
+          itemProgress: itemProgress,
+        );
       },
     );
   }
@@ -293,12 +370,14 @@ class MediaPoolView extends ConsumerWidget {
     BuildContext context,
     MediaItem item,
     bool isSelected,
-    MediaPoolNotifier notifier,
-  ) {
+    MediaPoolNotifier notifier, {
+    ImportProgress? itemProgress,
+  }) {
     final typeColor = MediaFormatter.typeColor(item.mediaType);
     final typeIcon = MediaFormatter.typeIcon(item.mediaType);
     final typeLabel = MediaFormatter.typeLabel(item.mediaType);
     final durationStr = MediaFormatter.formatItemDuration(item);
+    final isItemIndexing = itemProgress != null && !itemProgress.isDone;
 
     return Container(
       key: Key('media_item_${item.id}'),
@@ -320,110 +399,148 @@ class MediaPoolView extends ConsumerWidget {
         onTap: () => notifier.selectItem(item.id),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          child: Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Type Icon thumbnail
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: typeColor.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Icon(typeIcon, color: typeColor, size: 20),
-              ),
-              const SizedBox(width: 10),
-
-              // Title and metadata badge
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      item.fileName,
-                      style: const TextStyle(
-                        color: CatppuccinMocha.text,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+              Row(
+                children: [
+                  // Type Icon thumbnail
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: typeColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
                     ),
-                    const SizedBox(height: 3),
-                    Row(
+                    child: Icon(typeIcon, color: typeColor, size: 20),
+                  ),
+                  const SizedBox(width: 10),
+
+                  // Title and metadata badge
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 5,
-                            vertical: 1,
+                        Text(
+                          item.fileName,
+                          style: const TextStyle(
+                            color: CatppuccinMocha.text,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
                           ),
-                          decoration: BoxDecoration(
-                            color: typeColor.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                          child: Text(
-                            typeLabel,
-                            style: TextStyle(
-                              color: typeColor,
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        if (item.metadata.width != null &&
-                            item.metadata.height != null) ...[
-                          const SizedBox(width: 6),
-                          Text(
-                            '${item.metadata.width}x${item.metadata.height}',
-                            style: const TextStyle(
-                              color: CatppuccinMocha.subtext0,
-                              fontSize: 10,
+                        const SizedBox(height: 3),
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: typeColor.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                              child: Text(
+                                typeLabel,
+                                style: TextStyle(
+                                  color: typeColor,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                             ),
-                          ),
-                        ],
-                        if (item.metadata.sampleRate != null) ...[
-                          const SizedBox(width: 6),
-                          Text(
-                            '${(item.metadata.sampleRate! / 1000).toStringAsFixed(1)} kHz',
-                            style: const TextStyle(
-                              color: CatppuccinMocha.subtext0,
-                              fontSize: 10,
-                            ),
-                          ),
-                        ],
+                            if (item.metadata.width != null &&
+                                item.metadata.height != null) ...[
+                              const SizedBox(width: 6),
+                              Text(
+                                '${item.metadata.width}x${item.metadata.height}',
+                                style: const TextStyle(
+                                  color: CatppuccinMocha.subtext0,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ],
+                            if (item.metadata.sampleRate != null) ...[
+                              const SizedBox(width: 6),
+                              Text(
+                                '${(item.metadata.sampleRate! / 1000).toStringAsFixed(1)} kHz',
+                                style: const TextStyle(
+                                  color: CatppuccinMocha.subtext0,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ],
+                            if (isItemIndexing) ...[
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  'Indexando ${(itemProgress.progress.clamp(0.0, 1.0) * 100).round()}%',
+                                  key: Key('media_item_indexing_${item.id}'),
+                                  style: const TextStyle(
+                                    color: CatppuccinMocha.teal,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                       ],
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
+                  ),
+                  const SizedBox(width: 8),
 
-              // Formatted duration
-              Text(
-                durationStr,
-                style: const TextStyle(
-                  color: CatppuccinMocha.subtext1,
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(width: 4),
+                  // Formatted duration
+                  Text(
+                    durationStr,
+                    style: const TextStyle(
+                      color: CatppuccinMocha.subtext1,
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
 
-              // Add to Timeline Button
-              IconButton(
-                key: Key('add_to_timeline_${item.id}'),
-                tooltip: 'Adicionar à Timeline',
-                icon: const Icon(
-                  Icons.playlist_add_rounded,
-                  size: 20,
-                  color: CatppuccinMocha.mauve,
-                ),
-                onPressed: () => notifier.addMediaToTimeline(item),
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  // Add to Timeline Button
+                  IconButton(
+                    key: Key('add_to_timeline_${item.id}'),
+                    tooltip: 'Adicionar à Timeline',
+                    icon: const Icon(
+                      Icons.playlist_add_rounded,
+                      size: 20,
+                      color: CatppuccinMocha.mauve,
+                    ),
+                    onPressed: () => notifier.addMediaToTimeline(item),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 32, minHeight: 32),
+                  ),
+                ],
               ),
+              if (isItemIndexing) ...[
+                const SizedBox(height: 6),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    key: Key('media_item_progress_bar_${item.id}'),
+                    value: itemProgress.progress.clamp(0.0, 1.0),
+                    minHeight: 2,
+                    backgroundColor: CatppuccinMocha.surface0,
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      CatppuccinMocha.teal,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

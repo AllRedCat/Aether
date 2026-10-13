@@ -3,6 +3,64 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../bridge/api.dart';
 import '../../core/providers/project_provider.dart';
+import '../media_pool/media_pool_provider.dart';
+
+/// Immutable query key for requesting pre-computed audio waveform peaks
+/// at a specific Level of Detail (`lod`) from the Rust `.peak` sidecar cache.
+@immutable
+class WaveformQuery {
+  final String assetId;
+  final int lod;
+
+  const WaveformQuery({
+    required this.assetId,
+    this.lod = 0,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WaveformQuery &&
+          runtimeType == other.runtimeType &&
+          assetId == other.assetId &&
+          lod == other.lod;
+
+  @override
+  int get hashCode => assetId.hashCode ^ lod.hashCode;
+}
+
+typedef FetchAudioWaveformFn = Future<List<AudioPeak>> Function({
+  required String assetId,
+  required int lod,
+});
+
+/// Injectable provider for fetching waveform peaks across FFI (`getAudioWaveform`).
+/// Allows overriding in headless widget tests without requiring the native dylib.
+final audioWaveformFetcherProvider = Provider<FetchAudioWaveformFn>((ref) {
+  return getAudioWaveform;
+});
+
+/// Reactive provider that loads `List<AudioPeak>` (`min`, `max`, `rms`) for a
+/// clip's `assetId` and `lod` directly from the binary `.peak` cache via FFI.
+/// Automatically re-evaluates when background indexing for `assetId` completes.
+final clipWaveformProvider =
+    FutureProvider.family<List<AudioPeak>, WaveformQuery>((ref, query) async {
+  if (query.assetId.isEmpty) return const <AudioPeak>[];
+
+  // Re-fetch automatically when background indexing transitions stage (e.g. to Completed)
+  ref.watch(
+    mediaPoolProvider.select(
+      (s) => s.indexingProgress[query.assetId]?.stage,
+    ),
+  );
+
+  final fetchFn = ref.watch(audioWaveformFetcherProvider);
+  try {
+    return await fetchFn(assetId: query.assetId, lod: query.lod);
+  } catch (_) {
+    return const <AudioPeak>[];
+  }
+});
 
 /// Immutable state representation for the Aether Timeline.
 @immutable

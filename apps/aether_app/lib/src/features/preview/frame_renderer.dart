@@ -4,7 +4,13 @@ import '../../bridge/api.dart';
 
 class FrameRenderer extends StatefulWidget {
   final BridgeFrame? frame;
-  const FrameRenderer({super.key, this.frame});
+  final int textureId;
+
+  const FrameRenderer({
+    super.key,
+    this.frame,
+    this.textureId = 0,
+  });
 
   @override
   State<FrameRenderer> createState() => _FrameRendererState();
@@ -14,6 +20,14 @@ class _FrameRendererState extends State<FrameRenderer> {
   ui.Image? _image;
   bool _isDecoding = false;
   BridgeFrame? _lastDecodedFrame;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.frame != null) {
+      _decodeFrame();
+    }
+  }
 
   @override
   void didUpdateWidget(FrameRenderer oldWidget) {
@@ -28,12 +42,26 @@ class _FrameRendererState extends State<FrameRenderer> {
     if (frameToDecode == null || _isDecoding) return;
     if (_lastDecodedFrame == frameToDecode) return;
 
+    final width = frameToDecode.width;
+    final height = frameToDecode.height;
+    final stride = frameToDecode.rowStrideBytes >= width * 4
+        ? frameToDecode.rowStrideBytes
+        : width * 4;
+    final minRequiredBytes =
+        height > 0 && width > 0 ? (height - 1) * stride + width * 4 : 0;
+    if (width <= 0 ||
+        height <= 0 ||
+        frameToDecode.rgbaBytes.length < minRequiredBytes) {
+      _lastDecodedFrame = frameToDecode;
+      return;
+    }
+
     _isDecoding = true;
     try {
       ui.decodeImageFromPixels(
         frameToDecode.rgbaBytes,
-        frameToDecode.width,
-        frameToDecode.height,
+        width,
+        height,
         ui.PixelFormat.rgba8888,
         (image) {
           if (mounted) {
@@ -51,7 +79,7 @@ class _FrameRendererState extends State<FrameRenderer> {
             _decodeFrame();
           }
         },
-        rowBytes: frameToDecode.rowStrideBytes,
+        rowBytes: stride,
       );
     } catch (e) {
       _isDecoding = false;
@@ -66,13 +94,25 @@ class _FrameRendererState extends State<FrameRenderer> {
 
   @override
   Widget build(BuildContext context) {
+    final textureWidget = Texture(
+      key: const Key('preview_texture_widget'),
+      textureId: widget.textureId,
+      filterQuality: FilterQuality.medium,
+    );
+
     if (_image == null) {
-      return const Center(child: CircularProgressIndicator());
+      return textureWidget;
     }
-    return RawImage(
-      image: _image,
-      fit: BoxFit.contain,
-      filterQuality: FilterQuality.low,
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Opacity(opacity: 0.0, child: textureWidget),
+        RawImage(
+          image: _image,
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.low,
+        ),
+      ],
     );
   }
 }

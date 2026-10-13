@@ -7,7 +7,9 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:uuid/uuid.dart';
 
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `default_standalone_cache_mgr`, `emit_import_progress`, `ingest_and_schedule_caches`, `register_media_item_in_cache`, `register_project_assets`, `resolve_cache_manager`, `spawn_background_asset_indexing`
+// These types are ignored because they are not used by any `pub` functions: `RegisteredAsset`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 Future<void> initEngine() => RustLib.instance.api.crateApiInitEngine();
 
@@ -43,6 +45,16 @@ Future<Timeline> addClipToTrack(
         sourceOut: sourceOut,
         timelineIn: timelineIn);
 
+/// Imports a media asset at `path`, builds its binary temporal frame index (`.fidx`),
+/// triggers non-blocking background generation of `.peak` waveform and `.atlas`
+/// thumbnail caches, and returns [`MediaAssetMetadata`].
+Future<MediaAssetMetadata> importMedia({required String path}) =>
+    RustLib.instance.api.crateApiImportMedia(path: path);
+
+/// Alias for [`import_media`] exposing the `import_media_asset` contract.
+Future<MediaAssetMetadata> importMediaAsset({required String path}) =>
+    RustLib.instance.api.crateApiImportMediaAsset(path: path);
+
 /// Imports a media file, extracting its type and metadata via `aether_media`.
 /// If `project_path` is provided, the imported media is appended to the project's
 /// MediaPool and persisted to disk.
@@ -50,6 +62,20 @@ Future<MediaItem> importMediaFile(
         {String? projectPath, required String filePath}) =>
     RustLib.instance.api
         .crateApiImportMediaFile(projectPath: projectPath, filePath: filePath);
+
+/// Reads a single Level-of-Detail (`lod`) slice of audio waveform peaks (`min`, `max`, `rms`)
+/// for `asset_id` directly from the binary `.peak` / `.aether_peaks` sidecar cache on disk,
+/// without reading or decoding the original audio file during timeline rendering.
+///
+/// If the `.peak` sidecar has not yet been written to disk, it is generated once and cached.
+Future<List<AudioPeak>> getAudioWaveform(
+        {required String assetId, required int lod}) =>
+    RustLib.instance.api.crateApiGetAudioWaveform(assetId: assetId, lod: lod);
+
+/// Attaches a `StreamSink<ImportProgress>` to receive asynchronous progress notifications
+/// while media assets are inspected, indexed (`.fidx`), and cached (`.peak`, `.atlas`).
+Stream<ImportProgress> subscribeImportProgress() =>
+    RustLib.instance.api.crateApiSubscribeImportProgress();
 
 /// Generates an audio waveform cache file (Peak Data) for a specific media item.
 /// The resulting `.aether_peaks` binary file is saved inside the project's `.aether_cache/peaks` directory.
@@ -165,6 +191,32 @@ Future<BridgeFrame> extractSingleFrame(
     RustLib.instance.api
         .crateApiExtractSingleFrame(filePath: filePath, targetPts: targetPts);
 
+/// Single audio waveform peak bin (`min`, `max`, `rms` in normalized `[-1.0, 1.0]`)
+/// exposed across the FFI boundary for zero-decode timeline waveform rendering.
+class AudioPeak {
+  final double min;
+  final double max;
+  final double rms;
+
+  const AudioPeak({
+    required this.min,
+    required this.max,
+    required this.rms,
+  });
+
+  @override
+  int get hashCode => min.hashCode ^ max.hashCode ^ rms.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AudioPeak &&
+          runtimeType == other.runtimeType &&
+          min == other.min &&
+          max == other.max &&
+          rms == other.rms;
+}
+
 /// Raw RGBA8 video frame transferred across the FFI boundary to Flutter.
 class BridgeFrame {
   final int width;
@@ -246,6 +298,118 @@ class Clip {
           sourceOut == other.sourceOut &&
           timelineIn == other.timelineIn &&
           timelineOut == other.timelineOut;
+}
+
+/// Progress event emitted asynchronously via `StreamSink<ImportProgress>`
+/// while a media asset is being inspected, indexed (`.fidx`), and cached
+/// (`.peak` waveform pyramid and `.atlas` thumbnails).
+class ImportProgress {
+  final String assetId;
+  final String fileName;
+  final ImportStage stage;
+
+  /// Normalized progress in `[0.0, 1.0]`.
+  final double progress;
+  final String message;
+  final bool isDone;
+  final String? error;
+
+  const ImportProgress({
+    required this.assetId,
+    required this.fileName,
+    required this.stage,
+    required this.progress,
+    required this.message,
+    required this.isDone,
+    this.error,
+  });
+
+  @override
+  int get hashCode =>
+      assetId.hashCode ^
+      fileName.hashCode ^
+      stage.hashCode ^
+      progress.hashCode ^
+      message.hashCode ^
+      isDone.hashCode ^
+      error.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ImportProgress &&
+          runtimeType == other.runtimeType &&
+          assetId == other.assetId &&
+          fileName == other.fileName &&
+          stage == other.stage &&
+          progress == other.progress &&
+          message == other.message &&
+          isDone == other.isDone &&
+          error == other.error;
+}
+
+/// Stage of the asynchronous media ingestion and sidecar cache pipeline.
+enum ImportStage {
+  inspecting,
+  indexingFrames,
+  generatingWaveform,
+  generatingThumbnails,
+  completed,
+  failed,
+  ;
+}
+
+/// Complete descriptive, technical, and sidecar cache metadata returned when
+/// importing a media asset through the FFI bridge.
+class MediaAssetMetadata {
+  final String id;
+  final String filePath;
+  final String fileName;
+  final MediaType mediaType;
+  final MediaMetadata metadata;
+  final String cacheKey;
+  final String? frameIndexPath;
+  final String? peakCachePath;
+  final String? thumbAtlasPath;
+
+  const MediaAssetMetadata({
+    required this.id,
+    required this.filePath,
+    required this.fileName,
+    required this.mediaType,
+    required this.metadata,
+    required this.cacheKey,
+    this.frameIndexPath,
+    this.peakCachePath,
+    this.thumbAtlasPath,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      filePath.hashCode ^
+      fileName.hashCode ^
+      mediaType.hashCode ^
+      metadata.hashCode ^
+      cacheKey.hashCode ^
+      frameIndexPath.hashCode ^
+      peakCachePath.hashCode ^
+      thumbAtlasPath.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MediaAssetMetadata &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          filePath == other.filePath &&
+          fileName == other.fileName &&
+          mediaType == other.mediaType &&
+          metadata == other.metadata &&
+          cacheKey == other.cacheKey &&
+          frameIndexPath == other.frameIndexPath &&
+          peakCachePath == other.peakCachePath &&
+          thumbAtlasPath == other.thumbAtlasPath;
 }
 
 class MediaItem {

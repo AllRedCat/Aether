@@ -117,14 +117,15 @@ class _ColorCurvesViewState extends ConsumerState<ColorCurvesView> {
                 },
                 borderRadius: BorderRadius.circular(4),
                 child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                   child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.restart_alt_rounded, size: 13, color: CatppuccinMocha.overlay0),
-                      SizedBox(width: 4),
+                      Icon(Icons.restart_alt_rounded, size: 12, color: CatppuccinMocha.overlay0),
+                      SizedBox(width: 2),
                       Text(
                         'Reset Curves',
-                        style: TextStyle(color: CatppuccinMocha.overlay0, fontSize: 11),
+                        style: TextStyle(color: CatppuccinMocha.overlay0, fontSize: 10),
                       ),
                     ],
                   ),

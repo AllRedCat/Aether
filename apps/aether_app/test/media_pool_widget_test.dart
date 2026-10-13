@@ -379,5 +379,70 @@ void main() {
       );
       expect(find.text('900 PTS'), findsOneWidget);
     });
+
+    testWidgets(
+        'Test 5: Non-blocking indexing progress stream updates banner and per-item progress indicator',
+        (tester) async {
+      final mediaNotifier = MediaPoolNotifier(
+        filePickerService: MockFilePickerService([]),
+        initialItems: [sampleAudio],
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            mediaPoolProvider.overrideWith((ref) => mediaNotifier),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(body: MediaPoolView()),
+          ),
+        ),
+      );
+
+      expect(find.byKey(const Key('media_pool_indexing_banner')), findsNothing);
+
+      // Emit in-flight waveform generation progress (65%)
+      mediaNotifier.updateIndexingProgress(
+        ImportProgress(
+          assetId: sampleAudio.id.uuid,
+          fileName: sampleAudio.fileName,
+          stage: ImportStage.generatingWaveform,
+          progress: 0.65,
+          message: 'Calculando waveform (65%)...',
+          isDone: false,
+        ),
+      );
+      await tester.pump();
+
+      expect(
+          find.byKey(const Key('media_pool_indexing_banner')), findsOneWidget);
+      expect(find.text('65%'), findsOneWidget);
+      expect(find.byKey(Key('media_item_indexing_${sampleAudio.id}')),
+          findsOneWidget);
+      expect(find.byKey(Key('media_item_progress_bar_${sampleAudio.id}')),
+          findsOneWidget);
+
+      // Import button remains enabled (non-blocking)
+      final importBtn = tester.widget<ElevatedButton>(
+          find.byKey(const Key('import_media_button')));
+      expect(importBtn.onPressed, isNotNull);
+
+      // Emit completion event (100%)
+      mediaNotifier.updateIndexingProgress(
+        ImportProgress(
+          assetId: sampleAudio.id.uuid,
+          fileName: sampleAudio.fileName,
+          stage: ImportStage.completed,
+          progress: 1.0,
+          message: 'Indexação e cache concluídos',
+          isDone: true,
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const Key('media_pool_indexing_banner')), findsNothing);
+      expect(find.byKey(Key('media_item_indexing_${sampleAudio.id}')),
+          findsNothing);
+    });
   });
 }

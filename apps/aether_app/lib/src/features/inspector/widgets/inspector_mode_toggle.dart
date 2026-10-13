@@ -74,7 +74,7 @@ class InspectorModeToggle extends ConsumerWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         curve: Curves.easeOut,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         decoration: BoxDecoration(
           color: isSelected ? CatppuccinMocha.surface1 : Colors.transparent,
           borderRadius: BorderRadius.circular(4),
@@ -90,17 +90,17 @@ class InspectorModeToggle extends ConsumerWidget {
           children: [
             Icon(
               icon,
-              size: 11,
+              size: 10,
               color: isSelected ? CatppuccinMocha.mauve : CatppuccinMocha.subtext0,
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: 2),
             Text(
               label,
               style: TextStyle(
                 color: isSelected ? CatppuccinMocha.mauve : CatppuccinMocha.subtext0,
-                fontSize: 10,
+                fontSize: 8.5,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                letterSpacing: 0.2,
+                letterSpacing: -0.3,
               ),
             ),
           ],
