@@ -43,13 +43,16 @@ A arquitetura do projeto une o melhor de dois mundos: **Flutter** para uma inter
   - Exibição de banner global de progresso e indicadores visuais individuais em cada cartão do `MediaPoolView` enquanto os caches `.fidx`, `.peak` e filmstrips são processados em background.
 - **Inserção Direta na Timeline:** Adição ágil de mídias inspecionadas diretamente às trilhas de edição.
 
-### 📺 Player de Pré-Visualização Nativo (Preview)
+### 📺 Player de Pré-Visualização Nativo (Preview & Playback Engine 60 FPS)
 - **Streaming de Quadros em Tempo Real via FFI:** Transmissão eficiente de frames brutos RGBA8 do Rust para o Flutter utilizando `StreamSink`.
 - **Renderizador Otimizado (`RawImage`):** Decodificação em memória com correção de *stride* (`rowBytes`) para prevenir distorções e cisalhamentos diagonais.
-- **Controles de Reprodução:**
-  - Reprodução sequencial na taxa de quadros nativa da mídia (Play/Pause) com sincronização de parada determinística.
-  - *Scrubbing* de baixa latência através de seek por PTS ou tempo fracionário em segundos, com identificação real de quadros-chave via `CMSampleAttachmentKey_NotSync` no AVFoundation.
-  - Exibição de timecode reativo sincronizado com o playhead (PTS e formato `HH:MM:SS:FF`).
+- **Motor de Reprodução Assíncrono:** Arquitetura desacoplada multithread com threads dedicadas de *demux/decodificação* (`aether-dec`) e de *emissão/apresentação* (`aether-emit`), isolando completamente a thread principal de UI do trabalho pesado de descompressão.
+- **Buffer Circular com Leitura Antecipada (*Lookahead Ring Buffer*):** Fila de pré-carregamento contínuo em memória (`LookaheadRingBuffer`, capacidade de 8 a 16 frames RGBA8 decodificados) para garantir reprodução fluida a 60 fps e prevenir *stuttering* e *buffering* em codecs inter-frame pesados (H.264/HEVC).
+- **Sincronização A/V com Master Audio Clock:** Tempo de reprodução ditado pelo relógio de áudio de alta precisão (`MasterClock`), com interpolação monotônica e alinhamento instantâneo aos buffers de áudio PCM, eliminando qualquer desvio acumulado de sincronia entre faixas de vídeo e áudio.
+- **Descarte Inteligente de Quadros (*Frame Dropping*):** Pulo automático e de custo zero de quadros atrasados via `FrameDropper` quando o playhead alcança ou ultrapassa o tempo do quadro $N+1$ antes da exibição do quadro $N$ ($PTS_N + \Delta PTS_N \le MasterClock$), prevenindo atrasos cumulativos sob estresse de hardware.
+- **Flush Imediato e Zero-Latency Seeks:** Limpeza instantânea do conteúdo do buffer (`flush_and_set_epoch`) com incremento atômico de época, salto $O(\log K)$ para o I-Frame/IDR-Frame anterior via `FrameIndex` (`.fidx`) e recomposição imediata do quadro alvo durante o *scrubbing*, preenchendo o buffer antecipado para a frente em background.
+- **Controles de Transporte Eficientes:** Operações de `play()` e `pause()` que iniciam e congelam o relógio mestre sem destruir threads do SO (zero consumo de CPU quando pausado).
+- **Timecode Reativo:** Exibição precisa sincronizada com o playhead (PTS e formato `HH:MM:SS:FF`).
 
 ### ⏱️ Timeline Multi-trilha Não-Destrutiva & Formas de Onda FFI
 - **Suporte Multi-trilha:** Trilhas dedicadas para Vídeo, Áudio e Sobreposições (*Overlay*).
@@ -96,7 +99,7 @@ O Aether segue uma arquitetura em camadas desacopladas com fronteiras rígidas d
 |               Fronteira FFI (crates/aether_bridge)                |
 |  - flutter_rust_bridge v2: import_media, get_audio_waveform       |
 |  - StreamSinks: subscribe_import_progress, preview frames/state   |
-|  - Registros Ativos: SessionRegistry, AssetRegistry               |
+|  - Playback Engine: SessionRegistry, PlaybackSession desacoplada  |
 +-------------------+-----------------------------+-----------------+
                     |                             |
                     v                             v
@@ -107,6 +110,7 @@ O Aether segue uma arquitetura em camadas desacopladas com fronteiras rígidas d
 | - Índice Binário #[repr(C)] (.fidx)| | - Cálculo de PTS & Timebase   |
 | - Picos Multi-LOD (.peak) & .atlas| | - Persistência SQLite + JSON  |
 | - Decodificação AVFoundation/Symph| | - Metadados Técnicos (TechInfo)|
+| - Playback Engine: RingBuffer, A/V| |                               |
 +-------------------+---------------+ +-----------------------------+
                     |
                     v
@@ -144,9 +148,9 @@ Aether/
 │
 ├── crates/                       # Motores nativos em Rust
 │   ├── aether_core/              # Domínio: Timeline, Tracks, Clips, MediaTechInfo, SQLite Store
-│   ├── aether_media/             # ISO-BMFF, FrameIndex (.fidx), Peaks LOD (.peak), Filmstrips (.atlas), AVFoundation
+│   ├── aether_media/             # ISO-BMFF, FrameIndex (.fidx), Peaks LOD (.peak), Filmstrips (.atlas), Playback Engine (LookaheadRingBuffer, MasterClock)
 │   ├── aether_render/            # Pipeline de renderização em GPU (wgpu)
-│   └── aether_bridge/            # Ponte FFI (endpoints públicos para o Flutter)
+│   └── aether_bridge/            # Ponte FFI (SessionRegistry, PlaybackSession desacoplada, endpoints públicos para Flutter)
 │
 ├── tests/                        # Testes End-to-End e suíte adversarial automatizada
 │   ├── e2e_runner.py             # Orquestrador de testes de integração e invariantes
@@ -170,12 +174,13 @@ O Aether conta com uma infraestrutura rigorosa de testes cobrindo múltiplos ní
    - Verificação de fingerprinting determinístico (`partial_header + file_size + mtime`) contra vetores oficiais NIST SHA-256.
    - Validação de persistência SQLite (`store.rs`) e migração automática de projetos JSON legados.
    - Fuzzing de contêineres danificados, arquivos truncados, `timescale == 0` e cabeçalhos corrompidos sem `panic!`.
-   - Testes de estresse de scrubbing aleatório, decodificação multithread e ausência de vazamento de memória.
-2. **Flutter Widget & Integration Tests (179 testes):**
+   - Testes de reprodução contínua com Lookahead Ring Buffer, A/V Sync e concorrência multithread sob estresse de seeks aleatórios simultâneos (`playback_engine_concurrency_test.rs`), garantindo ausência de deadlocks, pânicos ou vazamento de memória.
+2. **Flutter Widget & Integration Tests (184 testes):**
    - Testes de interação com a Timeline, renderização direta de waveforms via `AudioWaveformPainter` a partir de arrays `AudioPeak` da FFI, seleção de clipes e propagação ao Inspector.
    - Testes de indicadores visuais não-bloqueantes de progresso de indexação (`ImportProgress` stream) no `MediaPoolView`.
    - Validação de renderização de painéis e divisores (`ResizableSplitView`) em resoluções e restrições extremas (incluindo viewports de 200px).
    - Testes de estabilidade do Media Pool e montagem/desmontagem de instâncias de pré-visualização.
+   - Teste de integração de ponta a ponta (`waveform_and_analysis_integration_test.dart`) cobrindo cálculo adaptativo de LOD por zoom e repintura do waveform.
 3. **Suíte End-to-End (E2E) Automatizada:**
    - Orquestrador em Python (`tests/run_tests.sh`) que valida os contratos de FFI, integridade de serialização e execução das ferramentas de análise estática.
 
