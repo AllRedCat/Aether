@@ -22,4 +22,4 @@ pub use traits::{AudioDecoder, DecoderResult, MediaDecoder, VideoDecoder};
 pub use types::{AudioBuffer, AudioSampleFormat, PixelFormat, VideoFrame};
 
 #[cfg(target_os = "macos")]
-pub use avfoundation::AvFoundationVideoDecoder;
+pub use avfoundation::{AvFoundationAudioDecoder, AvFoundationVideoDecoder};

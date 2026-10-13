@@ -7,7 +7,7 @@ use super::synthetic::SyntheticVideoDecoder;
 use super::traits::{AudioDecoder, DecoderResult, MediaDecoder, VideoDecoder};
 
 #[cfg(target_os = "macos")]
-use super::avfoundation::AvFoundationVideoDecoder;
+use super::avfoundation::{AvFoundationAudioDecoder, AvFoundationVideoDecoder};
 
 use aether_core::media::{MediaMetadata, MediaType};
 use aether_core::timeline::Rational;
@@ -168,14 +168,26 @@ pub fn open_media_decoder_with_timebase(
                 Box::new(SyntheticVideoDecoder::open_with_timebase(path_str, timebase)?);
 
             // Attempt to open optional audio track if present
-            let audio_dec: Option<Box<dyn AudioDecoder>> = if metadata.audio_channels.unwrap_or(0) > 0 {
-                match SymphoniaAudioDecoder::open_with_timebase(path_str, timebase) {
-                    Ok(a) => Some(Box::new(a)),
-                    Err(_) => None,
-                }
-            } else {
-                None
-            };
+            let audio_dec: Option<Box<dyn AudioDecoder>> =
+                if metadata.audio_channels.unwrap_or(0) > 0 {
+                    match SymphoniaAudioDecoder::open_with_timebase(path_str, timebase) {
+                        Ok(a) => Some(Box::new(a)),
+                        Err(_) => {
+                            #[cfg(target_os = "macos")]
+                            {
+                                AvFoundationAudioDecoder::open_with_timebase(path_str, timebase)
+                                    .ok()
+                                    .map(|a| Box::new(a) as Box<dyn AudioDecoder>)
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                None
+                            }
+                        }
+                    }
+                } else {
+                    None
+                };
 
             Ok(Box::new(CompositeMediaDecoder::new(
                 metadata,
@@ -268,6 +280,18 @@ pub fn open_audio_decoder_with_timebase(
         return Err(DecoderError::NoAudioStream);
     }
 
-    let audio = SymphoniaAudioDecoder::open_with_timebase(path_str, timebase)?;
-    Ok(Box::new(audio))
+    match SymphoniaAudioDecoder::open_with_timebase(path_str, timebase) {
+        Ok(audio) => Ok(Box::new(audio)),
+        Err(symph_err) => {
+            #[cfg(target_os = "macos")]
+            {
+                if let Ok(avf_audio) =
+                    AvFoundationAudioDecoder::open_with_timebase(path_str, timebase)
+                {
+                    return Ok(Box::new(avf_audio));
+                }
+            }
+            Err(symph_err)
+        }
+    }
 }

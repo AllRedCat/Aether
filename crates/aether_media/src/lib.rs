@@ -640,6 +640,12 @@ fn inspect_video(
                     audio_channels = Some(ch);
                     sample_rate = Some(symphonia_dec.sample_rate());
                 }
+            } else if let Ok(avf_audio) = decoder::AvFoundationAudioDecoder::open(path_str) {
+                let ch = avf_audio.channels();
+                if ch > 0 {
+                    audio_channels = Some(ch);
+                    sample_rate = Some(avf_audio.sample_rate());
+                }
             }
 
             return Ok(MediaInspection {
@@ -684,7 +690,20 @@ pub mod decoder;
 pub mod frame_index;
 pub mod importer;
 pub mod isobmff;
+pub mod thumbnails;
 
+/// Alias module `aether_media::audio::peaks` for ergonomic access.
+pub mod audio {
+    pub use crate::audio_peaks as peaks;
+}
+
+pub use audio_peaks::{
+    build_lod_chain_from_base, build_peak_pyramid_from_interleaved, compute_min_max,
+    compute_window_peak, downsample_lod_level, generate_waveform_cache,
+    generate_waveform_cache_pyramid, sanitize_pcm_sample, spawn_waveform_cache_worker,
+    AudioPeakLodLevel, AudioPeakPyramid, AudioPeakSample, WaveformJobHandle,
+    DEFAULT_BASE_SAMPLES_PER_PEAK, DEFAULT_LOD_LEVELS,
+};
 pub use cache::{
     compute_fingerprint_from_parts, compute_source_fingerprint, CacheManager, SourceFingerprint,
     PARTIAL_HASH_WINDOW_BYTES,
@@ -705,6 +724,12 @@ pub use importer::{
     build_or_load_frame_index, build_or_load_frame_index_with_timebase, ingest_media_with_cache,
     seek_nearest_keyframe, IngestedMedia,
 };
+pub use thumbnails::{
+    encode_rgba_image, encode_video_frame_thumbnail, extract_thumbnail_filmstrip,
+    resolve_sample_pts_list, spawn_default_thumbnail_worker, spawn_thumbnail_filmstrip_worker,
+    ThumbnailCodec, ThumbnailFilmstrip, ThumbnailIndexEntry, ThumbnailJobHandle,
+    ThumbnailStrategy, DEFAULT_THUMBNAIL_HEIGHT, DEFAULT_THUMBNAIL_WIDTH,
+};
 
 #[cfg(target_os = "macos")]
-pub use decoder::AvFoundationVideoDecoder;
+pub use decoder::{AvFoundationAudioDecoder, AvFoundationVideoDecoder};

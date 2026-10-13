@@ -254,7 +254,240 @@ mod native {
             }
         }
     }
+
+    #[repr(C)]
+    struct AvfAudioInfo {
+        sample_rate: u32,
+        channels: u16,
+        duration_seconds: f64,
+        duration_value: i64,
+        duration_timescale: i32,
+    }
+
+    #[repr(C)]
+    struct AvfRawAudioBuffer {
+        sample_rate: u32,
+        channels: u16,
+        frame_count: u32,
+        pts_value: i64,
+        pts_timescale: i32,
+        samples: *mut f32,
+        sample_count: usize,
+    }
+
+    extern "C" {
+        fn avf_audio_decoder_create(
+            file_path: *const c_char,
+            out_info: *mut AvfAudioInfo,
+            err_buf: *mut c_char,
+            err_len: usize,
+        ) -> *mut c_void;
+        fn avf_audio_decoder_next_buffer(
+            handle: *mut c_void,
+            out_buf: *mut AvfRawAudioBuffer,
+        ) -> i32;
+        fn avf_audio_decoder_free_buffer(buf: *mut AvfRawAudioBuffer);
+        fn avf_audio_decoder_seek_pts(
+            handle: *mut c_void,
+            target_value: i64,
+            target_timescale: i32,
+        ) -> i32;
+        fn avf_audio_decoder_destroy(handle: *mut c_void);
+    }
+
+    /// Native macOS audio decoder backed by AVFoundation `AVAssetReader` (32-bit float interleaved PCM).
+    pub struct AvFoundationAudioDecoder {
+        handle: *mut c_void,
+        sample_rate: u32,
+        channels: u16,
+        duration_seconds: f64,
+        duration_pts: i64,
+        timebase: Rational,
+    }
+
+    unsafe impl Send for AvFoundationAudioDecoder {}
+    unsafe impl Sync for AvFoundationAudioDecoder {}
+
+    impl AvFoundationAudioDecoder {
+        pub fn open(path: &str) -> DecoderResult<Self> {
+            Self::open_with_timebase(path, crate::DEFAULT_TIMEBASE)
+        }
+
+        pub fn open_with_timebase(path: &str, timebase: Rational) -> DecoderResult<Self> {
+            let p = Path::new(path);
+            if !p.exists() {
+                return Err(DecoderError::FileNotFound(path.to_string()));
+            }
+            if !p.is_file() {
+                return Err(DecoderError::NotAFile(path.to_string()));
+            }
+            let file_size = std::fs::metadata(p)
+                .map_err(|e| DecoderError::IoError(e.to_string()))?
+                .len();
+            if file_size == 0 {
+                return Err(DecoderError::EmptyFile(path.to_string()));
+            }
+
+            let c_path = CString::new(path)
+                .map_err(|e| DecoderError::InitializationFailed(e.to_string()))?;
+            let mut info = std::mem::MaybeUninit::<AvfAudioInfo>::uninit();
+            let mut err_buf = [0 as c_char; 512];
+
+            let handle = unsafe {
+                avf_audio_decoder_create(
+                    c_path.as_ptr(),
+                    info.as_mut_ptr(),
+                    err_buf.as_mut_ptr(),
+                    err_buf.len(),
+                )
+            };
+
+            if handle.is_null() {
+                let err_str = unsafe {
+                    std::ffi::CStr::from_ptr(err_buf.as_ptr())
+                        .to_string_lossy()
+                        .to_string()
+                };
+                if err_str.contains("No audio track") {
+                    return Err(DecoderError::NoAudioStream);
+                }
+                if err_str.contains("File does not exist") {
+                    return Err(DecoderError::FileNotFound(path.to_string()));
+                }
+                return Err(DecoderError::InitializationFailed(err_str));
+            }
+
+            let info = unsafe { info.assume_init() };
+            if info.sample_rate == 0 || info.channels == 0 {
+                unsafe { avf_audio_decoder_destroy(handle) };
+                return Err(DecoderError::CorruptData(
+                    "AVFoundation audio track reported zero sample rate or channels".to_string(),
+                ));
+            }
+
+            let fps_ratio = if timebase.den != 0 && timebase.num > 0 {
+                timebase.num as f64 / timebase.den as f64
+            } else {
+                60.0
+            };
+            let duration_pts = (info.duration_seconds * fps_ratio).round() as i64;
+
+            Ok(Self {
+                handle,
+                sample_rate: info.sample_rate,
+                channels: info.channels,
+                duration_seconds: info.duration_seconds,
+                duration_pts,
+                timebase,
+            })
+        }
+    }
+
+    impl crate::decoder::traits::AudioDecoder for AvFoundationAudioDecoder {
+        fn sample_rate(&self) -> u32 {
+            self.sample_rate
+        }
+
+        fn channels(&self) -> u16 {
+            self.channels
+        }
+
+        fn timebase(&self) -> Rational {
+            self.timebase
+        }
+
+        fn duration_pts(&self) -> i64 {
+            self.duration_pts
+        }
+
+        fn duration_seconds(&self) -> f64 {
+            self.duration_seconds
+        }
+
+        fn format(&self) -> crate::decoder::types::AudioSampleFormat {
+            crate::decoder::types::AudioSampleFormat::F32Interleaved
+        }
+
+        fn next_audio_buffer(&mut self) -> DecoderResult<Option<crate::decoder::types::AudioBuffer>> {
+            let mut raw = std::mem::MaybeUninit::<AvfRawAudioBuffer>::uninit();
+            let res = unsafe { avf_audio_decoder_next_buffer(self.handle, raw.as_mut_ptr()) };
+
+            match res {
+                0 => Ok(None),
+                1 => {
+                    let mut raw = unsafe { raw.assume_init() };
+                    let samples = unsafe {
+                        let slice = std::slice::from_raw_parts(raw.samples, raw.sample_count);
+                        let vec = slice.to_vec();
+                        avf_audio_decoder_free_buffer(&mut raw);
+                        vec
+                    };
+
+                    let fps_ratio = if self.timebase.den != 0 && self.timebase.num > 0 {
+                        self.timebase.num as f64 / self.timebase.den as f64
+                    } else {
+                        60.0
+                    };
+                    let sec = if raw.pts_timescale != 0 {
+                        raw.pts_value as f64 / raw.pts_timescale as f64
+                    } else {
+                        0.0
+                    };
+                    let pts = (sec * fps_ratio).round() as i64;
+                    let dur_sec = if self.sample_rate > 0 {
+                        raw.frame_count as f64 / self.sample_rate as f64
+                    } else {
+                        0.0
+                    };
+                    let duration_pts = (dur_sec * fps_ratio).round().max(1.0) as i64;
+
+                    Ok(Some(crate::decoder::types::AudioBuffer::new(
+                        raw.sample_rate,
+                        raw.channels,
+                        samples,
+                        pts,
+                        duration_pts,
+                        self.timebase,
+                    )))
+                }
+                _ => Err(DecoderError::DecodeError(
+                    "AVAssetReader failed decoding audio buffer".to_string(),
+                )),
+            }
+        }
+
+        fn seek_pts(&mut self, target_pts: i64) -> DecoderResult<()> {
+            let clamped = target_pts.max(0);
+            let fps_ratio = if self.timebase.den != 0 && self.timebase.num > 0 {
+                self.timebase.num as f64 / self.timebase.den as f64
+            } else {
+                60.0
+            };
+            let sec = clamped as f64 / fps_ratio;
+            let target_timescale = self.sample_rate.max(600) as i32;
+            let target_value = (sec * target_timescale as f64).round() as i64;
+
+            let res =
+                unsafe { avf_audio_decoder_seek_pts(self.handle, target_value, target_timescale) };
+            if res != 0 {
+                return Err(DecoderError::SeekError(format!(
+                    "AVAssetReader audio seek to PTS {} failed",
+                    target_pts
+                )));
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for AvFoundationAudioDecoder {
+        fn drop(&mut self) {
+            if !self.handle.is_null() {
+                unsafe { avf_audio_decoder_destroy(self.handle) };
+                self.handle = std::ptr::null_mut();
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
-pub use native::AvFoundationVideoDecoder;
+pub use native::{AvFoundationAudioDecoder, AvFoundationVideoDecoder};

@@ -32,4 +32,28 @@ void avf_decoder_free_frame(AvfRawFrame* frame);
 int avf_decoder_seek_pts(void* handle, int64_t target_value, int32_t target_timescale);
 void avf_decoder_destroy(void* handle);
 
+typedef struct {
+    uint32_t sample_rate;
+    uint16_t channels;
+    double duration_seconds;
+    int64_t duration_value;
+    int32_t duration_timescale;
+} AvfAudioInfo;
+
+typedef struct {
+    uint32_t sample_rate;
+    uint16_t channels;
+    uint32_t frame_count;
+    int64_t pts_value;
+    int32_t pts_timescale;
+    float *samples;
+    size_t sample_count;
+} AvfRawAudioBuffer;
+
+void* avf_audio_decoder_create(const char* file_path, AvfAudioInfo* out_info, char* err_buf, size_t err_len);
+int avf_audio_decoder_next_buffer(void* handle, AvfRawAudioBuffer* out_buf);
+void avf_audio_decoder_free_buffer(AvfRawAudioBuffer* buf);
+int avf_audio_decoder_seek_pts(void* handle, int64_t target_value, int32_t target_timescale);
+void avf_audio_decoder_destroy(void* handle);
+
 #endif /* AVFOUNDATION_BRIDGE_H */

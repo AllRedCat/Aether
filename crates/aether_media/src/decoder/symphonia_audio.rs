@@ -93,10 +93,18 @@ impl SymphoniaAudioDecoder {
             return Err(DecoderError::CorruptData("Audio sample rate is 0".to_string()));
         }
 
-        let channels = codec_params
-            .channels
-            .map(|c| c.count() as u16)
-            .unwrap_or(2);
+        let channels = match codec_params.channels {
+            Some(c) => {
+                let count = c.count() as u16;
+                if count == 0 {
+                    return Err(DecoderError::CorruptData(
+                        "Audio channel count is 0".to_string(),
+                    ));
+                }
+                count
+            }
+            None => 2,
+        };
 
         let duration_seconds = if let (Some(n_frames), Some(rate)) = (codec_params.n_frames, codec_params.sample_rate) {
             if rate > 0 {

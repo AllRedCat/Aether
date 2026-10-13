@@ -195,6 +195,9 @@ impl PlaybackSession {
     pub fn pause(&self) -> Result<(), String> {
         self.is_playing.store(false, Ordering::SeqCst);
         self.stop_ticker();
+        // Wait for any in-flight tick_playback() holding the decoder lock to finish
+        // before returning from pause(), preventing post-pause PTS drift.
+        let _sync = self.decoder.lock();
         self.broadcast_state();
         Ok(())
     }

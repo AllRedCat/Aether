@@ -29,16 +29,22 @@ A arquitetura do projeto une o melhor de dois mundos: **Flutter** para uma inter
   - Layout binário fixo `#[repr(C)]` de **24 bytes** (`FrameIndexEntry`: `pts: i64`, `file_offset: u64`, `packet_size: u32`, `flags: u8` com bits `FLAG_IS_KEYFRAME` e `FLAG_IS_DISPOSABLE`, `_pad: [u8; 3]`).
   - Persistido como arquivo binário plano contíguo (`cache/index/<key>.fidx`) com cabeçalho validado de 64 bytes (`AETHFIDX`).
   - **Zero-Latency Seeking ($O(\log N)$):** Busca binária logarítmica sobre o índice contíguo para localizar instantaneamente (< 5ms mesmo em vídeos de 1h+ a 100fps) o I-Frame/IDR-Frame anterior mais próximo a qualquer timestamp de seek.
-- **Gerenciador de Cache Determinístico & Sidecars (`cache.rs` & `audio_peaks.rs`):**
+- **Gerenciador de Cache Determinístico & Sidecars (`cache.rs`, `audio_peaks.rs` & `thumbnails.rs`):**
   - Chave determinística baseada em `SHA-256(SHA-256(primeiros_64KiB) + file_size + mtime)` com escrita atômica em disco.
-  - **Waveforms de Áudio (`audio_peaks.rs`):** Geração assíncrona em background de arquivos binários de picos (`min`/`max`) para arquivos de áudio e faixas de áudio de vídeos, sem bloquear a UI durante a importação.
+  - **Cache de Picos de Áudio Multi-LOD (`audio_peaks.rs` — `.peak` / `AETHPEAK` v2):**
+    - Worker assíncrono em background (`spawn_waveform_cache_worker`) que consome áudio decodificado em PCM float32 (via Symphonia com fallback nativo para `AvFoundationAudioDecoder` no macOS).
+    - Acumulador streaming de memória constante ($O(1)$) com sanitização de `NaN`/`Inf` e cálculo de `min`, `max` e `rms` (`AudioPeakSample` `#[repr(C)]` de 12 bytes).
+    - Pirâmide multi-nível de detalhe (LOD / mipmapping de áudio 2:1) com diretório de offsets no cabeçalho para leitura seletiva de um único nível LOD direto do disco durante zoom rápido na timeline.
+  - **Miniaturas da Timeline / Filmstrips (`thumbnails.rs` — `.atlas` / `AETHTHMB`):**
+    - Worker assíncrono em background (`spawn_thumbnail_filmstrip_worker`) para extração de miniaturas em baixa resolução (`160×90` em **JPEG** ou **WebP**) baseadas nos **I-Frames/IDR-Frames** do índice `.fidx` ou em intervalos fixos de tempo/PTS.
+    - Sequência binária indexada com tabela `ThumbnailIndexEntry` (`#[repr(C)]` de 24 bytes: `pts`, `byte_offset`, `byte_len`, `grid_col`, `grid_row`), busca binária $O(\log N)$ por timestamp (`PTS -> offset`), coordenadas UV normalizadas e exportação de spritesheet/atlas único.
 - **Inserção Direta na Timeline:** Adição ágil de mídias inspecionadas diretamente às trilhas de edição.
 
 ### 📺 Player de Pré-Visualização Nativo (Preview)
 - **Streaming de Quadros em Tempo Real via FFI:** Transmissão eficiente de frames brutos RGBA8 do Rust para o Flutter utilizando `StreamSink`.
 - **Renderizador Otimizado (`RawImage`):** Decodificação em memória com correção de *stride* (`rowBytes`) para prevenir distorções e cisalhamentos diagonais.
 - **Controles de Reprodução:**
-  - Reprodução sequencial na taxa de quadros nativa da mídia (Play/Pause).
+  - Reprodução sequencial na taxa de quadros nativa da mídia (Play/Pause) com sincronização de parada determinística.
   - *Scrubbing* de baixa latência através de seek por PTS ou tempo fracionário em segundos, com identificação real de quadros-chave via `CMSampleAttachmentKey_NotSync` no AVFoundation.
   - Exibição de timecode reativo sincronizado com o playhead (PTS e formato `HH:MM:SS:FF`).
 
@@ -91,7 +97,7 @@ O Aether segue uma arquitetura em camadas desacopladas com fronteiras rígidas d
 |       (crates/aether_media)       | |     (crates/aether_core)      |
 | - Demuxing ISO-BMFF/MOV (isobmff) | | - Timeline DAG, Tracks, Clips |
 | - Índice Binário #[repr(C)] (.fidx)| | - Cálculo de PTS & Timebase   |
-| - Cache SHA-256 & Waveforms (.peak)| | - Persistência SQLite + JSON  |
+| - Picos Multi-LOD (.peak) & .atlas| | - Persistência SQLite + JSON  |
 | - Decodificação AVFoundation/Symph| | - Metadados Técnicos (TechInfo)|
 +-------------------+---------------+ +-----------------------------+
                     |
@@ -130,7 +136,7 @@ Aether/
 │
 ├── crates/                       # Motores nativos em Rust
 │   ├── aether_core/              # Domínio: Timeline, Tracks, Clips, MediaTechInfo, SQLite Store
-│   ├── aether_media/             # Demuxing ISO-BMFF, FrameIndex (.fidx), CacheManager, Peaks, AVFoundation
+│   ├── aether_media/             # ISO-BMFF, FrameIndex (.fidx), Peaks LOD (.peak), Filmstrips (.atlas), AVFoundation
 │   ├── aether_render/            # Pipeline de renderização em GPU (wgpu)
 │   └── aether_bridge/            # Ponte FFI (endpoints públicos para o Flutter)
 │
@@ -149,7 +155,9 @@ Aether/
 O Aether conta com uma infraestrutura rigorosa de testes cobrindo múltiplos níveis:
 
 1. **Rust Core & Media Unit/Stress Tests:**
-   - Validação de layout binário `#[repr(C)]` de 24 bytes (`FrameIndexEntry`), serialização/desserialização `.fidx` e busca binária $O(\log N)$ com tolerância a limites (`pts < 0`, entre P/B-frames, `i64::MAX`, streams vazias e orçamento < 5ms).
+   - Validação de layout binário `#[repr(C)]` de 24 bytes (`FrameIndexEntry` e `ThumbnailIndexEntry`), serialização/desserialização `.fidx` e `.atlas`, e busca binária $O(\log N)$ com tolerância a limites (`pts < 0`, entre P/B-frames, `i64::MAX`, streams vazias e orçamento < 5ms).
+   - Testes de cálculo de picos de áudio (`min`, `max`, `rms`) com buffers PCM sintéticos (silêncio, onda senoidal pura com $\text{RMS} = 1/\sqrt{2}$, clipping em amplitude máxima e resistência a `NaN`/`Inf`), geração de pirâmide multi-LOD e leitura seletiva por nível.
+   - Testes de extração assíncrona de filmstrips (`160×90` JPEG/WebP), montagem de spritesheet e lookup por timestamp.
    - Verificação de fingerprinting determinístico (`partial_header + file_size + mtime`) contra vetores oficiais NIST SHA-256.
    - Validação de persistência SQLite (`store.rs`) e migração automática de projetos JSON legados.
    - Fuzzing de contêineres danificados, arquivos truncados, `timescale == 0` e cabeçalhos corrompidos sem `panic!`.

@@ -221,4 +221,216 @@ void avf_decoder_destroy(void* handle) {
     }
 }
 
+@interface AvfBridgeAudioDecoder : NSObject
+@property (nonatomic, strong) AVURLAsset *asset;
+@property (nonatomic, strong) AVAssetTrack *audioTrack;
+@property (nonatomic, strong) AVAssetReader *reader;
+@property (nonatomic, strong) AVAssetReaderTrackOutput *output;
+@property (nonatomic, assign) AvfAudioInfo info;
+@end
+
+@implementation AvfBridgeAudioDecoder
+@end
+
+static NSDictionary* avf_pcm_float32_settings(void) {
+    return @{
+        AVFormatIDKey: @(kAudioFormatLinearPCM),
+        AVLinearPCMBitDepthKey: @(32),
+        AVLinearPCMIsFloatKey: @YES,
+        AVLinearPCMIsBigEndianKey: @NO,
+        AVLinearPCMIsNonInterleaved: @NO
+    };
+}
+
+void* avf_audio_decoder_create(const char* file_path, AvfAudioInfo* out_info, char* err_buf, size_t err_len) {
+    @autoreleasepool {
+        if (!file_path) {
+            if (err_buf && err_len > 0) snprintf(err_buf, err_len, "Null file path");
+            return NULL;
+        }
+
+        NSString *pathStr = [NSString stringWithUTF8String:file_path];
+        if (!pathStr || ![[NSFileManager defaultManager] fileExistsAtPath:pathStr]) {
+            if (err_buf && err_len > 0) snprintf(err_buf, err_len, "File does not exist: %s", file_path);
+            return NULL;
+        }
+
+        NSURL *url = [NSURL fileURLWithPath:pathStr];
+        AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
+        NSArray<AVAssetTrack *> *tracks = [asset tracksWithMediaType:AVMediaTypeAudio];
+        if (tracks.count == 0) {
+            if (err_buf && err_len > 0) snprintf(err_buf, err_len, "No audio track found in media file: %s", file_path);
+            return NULL;
+        }
+
+        AVAssetTrack *track = tracks.firstObject;
+        CMTime duration = asset.duration;
+        if (duration.timescale <= 0) {
+            if (err_buf && err_len > 0) snprintf(err_buf, err_len, "Invalid container timescale (<= 0)");
+            return NULL;
+        }
+
+        uint32_t sampleRate = (uint32_t)(track.naturalTimeScale > 0 ? track.naturalTimeScale : 48000);
+        uint16_t channels = 2;
+
+        NSArray *formatDescs = track.formatDescriptions;
+        if (formatDescs.count > 0) {
+            CMAudioFormatDescriptionRef fmt = (__bridge CMAudioFormatDescriptionRef)formatDescs.firstObject;
+            const AudioStreamBasicDescription *asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fmt);
+            if (asbd != NULL) {
+                if (asbd->mSampleRate > 0.0) {
+                    sampleRate = (uint32_t)(asbd->mSampleRate + 0.5);
+                }
+                if (asbd->mChannelsPerFrame > 0) {
+                    channels = (uint16_t)asbd->mChannelsPerFrame;
+                }
+            }
+        }
+
+        double durationSeconds = CMTimeGetSeconds(duration);
+        if (isnan(durationSeconds) || durationSeconds < 0.0) {
+            durationSeconds = 0.0;
+        }
+
+        AvfBridgeAudioDecoder *dec = [[AvfBridgeAudioDecoder alloc] init];
+        dec.asset = asset;
+        dec.audioTrack = track;
+        dec.info = (AvfAudioInfo){
+            .sample_rate = sampleRate,
+            .channels = channels,
+            .duration_seconds = durationSeconds,
+            .duration_value = duration.value,
+            .duration_timescale = duration.timescale,
+        };
+
+        if (out_info) {
+            *out_info = dec.info;
+        }
+
+        NSError *error = nil;
+        dec.reader = [AVAssetReader assetReaderWithAsset:dec.asset error:&error];
+        if (!dec.reader || error) {
+            if (err_buf && err_len > 0) {
+                snprintf(err_buf, err_len, "AVAssetReader audio init failed: %s",
+                         error.localizedDescription.UTF8String ?: "Unknown error");
+            }
+            return NULL;
+        }
+
+        dec.output = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:dec.audioTrack
+                                                               outputSettings:avf_pcm_float32_settings()];
+        dec.output.alwaysCopiesSampleData = NO;
+        [dec.reader addOutput:dec.output];
+
+        if (![dec.reader startReading]) {
+            if (err_buf && err_len > 0) {
+                snprintf(err_buf, err_len, "AVAssetReader audio failed to start reading");
+            }
+            return NULL;
+        }
+
+        return (__bridge_retained void*)dec;
+    }
+}
+
+int avf_audio_decoder_next_buffer(void* handle, AvfRawAudioBuffer* out_buf) {
+    if (!handle || !out_buf) return -1;
+    AvfBridgeAudioDecoder *dec = (__bridge AvfBridgeAudioDecoder*)handle;
+
+    @autoreleasepool {
+        CMSampleBufferRef sampleBuffer = [dec.output copyNextSampleBuffer];
+        if (!sampleBuffer) {
+            if (dec.reader.status == AVAssetReaderStatusFailed) {
+                return -1;
+            }
+            return 0; // End of stream
+        }
+
+        CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+        CMItemCount numFrames = CMSampleBufferGetNumSamples(sampleBuffer);
+        CMBlockBufferRef blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer);
+        if (!blockBuffer || numFrames <= 0) {
+            CFRelease(sampleBuffer);
+            return 0;
+        }
+
+        size_t byteLen = CMBlockBufferGetDataLength(blockBuffer);
+        size_t floatCount = byteLen / sizeof(float);
+        if (floatCount == 0) {
+            CFRelease(sampleBuffer);
+            return 0;
+        }
+
+        float *copySamples = (float*)malloc(floatCount * sizeof(float));
+        if (!copySamples) {
+            CFRelease(sampleBuffer);
+            return -1;
+        }
+
+        OSStatus status = CMBlockBufferCopyDataBytes(blockBuffer, 0, floatCount * sizeof(float), copySamples);
+        CFRelease(sampleBuffer);
+        if (status != kCMBlockBufferNoErr) {
+            free(copySamples);
+            return -1;
+        }
+
+        uint16_t channels = dec.info.channels > 0 ? dec.info.channels : 1;
+        uint32_t frameCount = (uint32_t)(floatCount / channels);
+
+        out_buf->sample_rate = dec.info.sample_rate;
+        out_buf->channels = channels;
+        out_buf->frame_count = frameCount;
+        out_buf->pts_value = pts.value;
+        out_buf->pts_timescale = pts.timescale;
+        out_buf->samples = copySamples;
+        out_buf->sample_count = floatCount;
+        return 1;
+    }
+}
+
+void avf_audio_decoder_free_buffer(AvfRawAudioBuffer* buf) {
+    if (buf && buf->samples) {
+        free(buf->samples);
+        buf->samples = NULL;
+        buf->sample_count = 0;
+    }
+}
+
+int avf_audio_decoder_seek_pts(void* handle, int64_t target_value, int32_t target_timescale) {
+    if (!handle) return -1;
+    AvfBridgeAudioDecoder *dec = (__bridge AvfBridgeAudioDecoder*)handle;
+
+    @autoreleasepool {
+        [dec.reader cancelReading];
+
+        CMTime seekTime = CMTimeMake(target_value, target_timescale);
+        NSError *error = nil;
+        dec.reader = [AVAssetReader assetReaderWithAsset:dec.asset error:&error];
+        if (!dec.reader || error) return -1;
+
+        dec.reader.timeRange = CMTimeRangeMake(seekTime, kCMTimePositiveInfinity);
+        dec.output = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:dec.audioTrack
+                                                               outputSettings:avf_pcm_float32_settings()];
+        dec.output.alwaysCopiesSampleData = NO;
+        [dec.reader addOutput:dec.output];
+
+        if (![dec.reader startReading]) {
+            return -1;
+        }
+        return 0;
+    }
+}
+
+void avf_audio_decoder_destroy(void* handle) {
+    if (!handle) return;
+    @autoreleasepool {
+        AvfBridgeAudioDecoder *dec = (__bridge_transfer AvfBridgeAudioDecoder*)handle;
+        [dec.reader cancelReading];
+        dec.reader = nil;
+        dec.output = nil;
+        dec.audioTrack = nil;
+        dec.asset = nil;
+    }
+}
+
 #pragma clang diagnostic pop
