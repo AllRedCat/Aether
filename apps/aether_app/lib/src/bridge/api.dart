@@ -297,6 +297,7 @@ class MediaMetadata {
   final String? pixelFormat;
   final bool? isVfr;
   final List<int>? keyframePts;
+  final MediaTechInfo? tech;
 
   const MediaMetadata({
     this.width,
@@ -312,6 +313,7 @@ class MediaMetadata {
     this.pixelFormat,
     this.isVfr,
     this.keyframePts,
+    this.tech,
   });
 
   @override
@@ -328,7 +330,8 @@ class MediaMetadata {
       audioCodec.hashCode ^
       pixelFormat.hashCode ^
       isVfr.hashCode ^
-      keyframePts.hashCode;
+      keyframePts.hashCode ^
+      tech.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -347,7 +350,8 @@ class MediaMetadata {
           audioCodec == other.audioCodec &&
           pixelFormat == other.pixelFormat &&
           isVfr == other.isVfr &&
-          keyframePts == other.keyframePts;
+          keyframePts == other.keyframePts &&
+          tech == other.tech;
 }
 
 class MediaPool {
@@ -366,6 +370,65 @@ class MediaPool {
       other is MediaPool &&
           runtimeType == other.runtimeType &&
           items == other.items;
+}
+
+class MediaTechInfo {
+  final String contentHash;
+  final String? container;
+  final int? codedWidth;
+  final int? codedHeight;
+  final int? displayWidth;
+  final int? displayHeight;
+  final int? bitDepth;
+  final Rational? trackTimebase;
+  final String? channelLayout;
+  final int? videoPacketCount;
+  final int? keyframeCount;
+
+  const MediaTechInfo({
+    required this.contentHash,
+    this.container,
+    this.codedWidth,
+    this.codedHeight,
+    this.displayWidth,
+    this.displayHeight,
+    this.bitDepth,
+    this.trackTimebase,
+    this.channelLayout,
+    this.videoPacketCount,
+    this.keyframeCount,
+  });
+
+  @override
+  int get hashCode =>
+      contentHash.hashCode ^
+      container.hashCode ^
+      codedWidth.hashCode ^
+      codedHeight.hashCode ^
+      displayWidth.hashCode ^
+      displayHeight.hashCode ^
+      bitDepth.hashCode ^
+      trackTimebase.hashCode ^
+      channelLayout.hashCode ^
+      videoPacketCount.hashCode ^
+      keyframeCount.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MediaTechInfo &&
+          runtimeType == other.runtimeType &&
+          contentHash == other.contentHash &&
+          container == other.container &&
+          codedWidth == other.codedWidth &&
+          codedHeight == other.codedHeight &&
+          displayWidth == other.displayWidth &&
+          displayHeight == other.displayHeight &&
+          bitDepth == other.bitDepth &&
+          trackTimebase == other.trackTimebase &&
+          channelLayout == other.channelLayout &&
+          videoPacketCount == other.videoPacketCount &&
+          keyframeCount == other.keyframeCount;
 }
 
 enum MediaType {

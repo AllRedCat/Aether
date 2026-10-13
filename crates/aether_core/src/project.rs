@@ -47,15 +47,15 @@ impl Project {
         Ok(project)
     }
 
-    /// Saves the current project state (Timeline, MediaPool, Clips) to disk as JSON.
+    /// Saves the current project state (Timeline, MediaPool, Clips) to the
+    /// `.aether` SQLite database in a single transaction.
     pub fn save(&self) -> Result<(), String> {
-        let json_data = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("Falha ao converter projeto para JSON: {}", e))?;
+        crate::store::save_project(self)
+    }
 
-        fs::write(&self.file_path, json_data)
-            .map_err(|e| format!("Falha ao escrever arquivo no disco: {}", e))?;
-
-        Ok(())
+    /// Root directory for derived, recreatable caches: `<project_path>/cache`.
+    pub fn cache_root(&self) -> std::path::PathBuf {
+        Path::new(&self.project_path).join("cache")
     }
 
     /// Returns the absolute path to the project's media cache directory, creating it if necessary.
@@ -73,15 +73,10 @@ impl Project {
         Ok(cache_dir)
     }
 
-    /// Loads an existing project from disk from its .aether file path.
+    /// Loads an existing project from its `.aether` file path.
+    /// Legacy JSON projects are migrated to SQLite transparently.
     pub fn load(file_path: &str) -> Result<Self, String> {
-        let json_data = fs::read_to_string(file_path)
-            .map_err(|e| format!("Falha ao ler o arquivo .aether: {}", e))?;
-
-        let project: Project = serde_json::from_str(&json_data)
-            .map_err(|e| format!("Falha ao decodificar projeto corrompido: {}", e))?;
-
-        Ok(project)
+        crate::store::load_project(file_path)
     }
 
     /// Convenience helper to add a media item to the project's media pool.
@@ -191,7 +186,7 @@ mod tests {
                 audio_codec: None,
                 pixel_format: None,
                 is_vfr: None,
-                keyframe_pts: None,
+                keyframe_pts: None, tech: None,
             },
         );
         let media_id = project.add_media(media_item);
@@ -289,7 +284,7 @@ mod tests {
                 audio_codec: None,
                 pixel_format: None,
                 is_vfr: None,
-                keyframe_pts: None,
+                keyframe_pts: None, tech: None,
             },
         );
         let media_id = project.add_media(media);

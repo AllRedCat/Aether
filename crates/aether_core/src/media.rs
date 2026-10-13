@@ -36,7 +36,38 @@ pub struct MediaMetadata {
     pub audio_codec: Option<String>,
     pub pixel_format: Option<String>,
     pub is_vfr: Option<bool>,
+    /// Deprecated: the per-frame index now lives in the binary packet index
+    /// sidecar (`index.pkt`). Kept for API compatibility and never persisted.
     pub keyframe_pts: Option<Vec<i64>>,
+    /// Deep-inspection data produced by the ingest pipeline.
+    /// `None` for legacy items imported before the pipeline existed.
+    #[serde(default)]
+    pub tech: Option<MediaTechInfo>,
+}
+
+/// Deep container/stream information produced by the ingest pipeline.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MediaTechInfo {
+    /// Hex SHA-256 of (first MiB ‖ last MiB ‖ file size LE). Also the cache key.
+    pub content_hash: String,
+    /// Container brand, e.g. "mp4", "mov", "wav", "png".
+    pub container: Option<String>,
+    /// Encoded (stored) frame dimensions.
+    pub coded_width: Option<u32>,
+    pub coded_height: Option<u32>,
+    /// Presentation dimensions after pixel aspect ratio / clean aperture.
+    pub display_width: Option<u32>,
+    pub display_height: Option<u32>,
+    /// Bits per color component (8, 10, 12…).
+    pub bit_depth: Option<u8>,
+    /// Native timebase of the primary stream (1 / track timescale).
+    pub track_timebase: Option<Rational>,
+    /// Human readable channel layout, e.g. "mono", "stereo", "5.1".
+    pub channel_layout: Option<String>,
+    /// Number of packets in the primary video track.
+    pub video_packet_count: Option<u32>,
+    /// Number of sync samples (I/IDR frames) in the primary video track.
+    pub keyframe_count: Option<u32>,
 }
 
 impl Default for MediaMetadata {
@@ -55,6 +86,7 @@ impl Default for MediaMetadata {
             pixel_format: None,
             is_vfr: None,
             keyframe_pts: None,
+            tech: None,
         }
     }
 }
@@ -211,7 +243,7 @@ mod tests {
             audio_codec: None,
             pixel_format: None,
             is_vfr: None,
-            keyframe_pts: None,
+            keyframe_pts: None, tech: None,
         }
     }
 
@@ -246,7 +278,7 @@ mod tests {
             audio_codec: None,
             pixel_format: None,
             is_vfr: None,
-            keyframe_pts: None,
+            keyframe_pts: None, tech: None,
         };
         assert_eq!(video_meta.fps(), Some(60.0));
     }
@@ -300,7 +332,7 @@ mod tests {
                 audio_codec: None,
                 pixel_format: None,
                 is_vfr: None,
-                keyframe_pts: None,
+                keyframe_pts: None, tech: None,
             },
         );
         let id3 = item3.id;
@@ -366,7 +398,7 @@ mod tests {
                 audio_codec: None,
                 pixel_format: None,
                 is_vfr: None,
-                keyframe_pts: None,
+                keyframe_pts: None, tech: None,
             },
         );
         pool.add(item);

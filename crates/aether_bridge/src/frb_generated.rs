@@ -932,10 +932,25 @@ const _: fn() = || {
         let _: Option<String> = MediaMetadata.pixel_format;
         let _: Option<bool> = MediaMetadata.is_vfr;
         let _: Option<Vec<i64>> = MediaMetadata.keyframe_pts;
+        let _: Option<crate::api::MediaTechInfo> = MediaMetadata.tech;
     }
     {
         let MediaPool = None::<crate::api::MediaPool>.unwrap();
         let _: Vec<crate::api::MediaItem> = MediaPool.items;
+    }
+    {
+        let MediaTechInfo = None::<crate::api::MediaTechInfo>.unwrap();
+        let _: String = MediaTechInfo.content_hash;
+        let _: Option<String> = MediaTechInfo.container;
+        let _: Option<u32> = MediaTechInfo.coded_width;
+        let _: Option<u32> = MediaTechInfo.coded_height;
+        let _: Option<u32> = MediaTechInfo.display_width;
+        let _: Option<u32> = MediaTechInfo.display_height;
+        let _: Option<u8> = MediaTechInfo.bit_depth;
+        let _: Option<crate::api::Rational> = MediaTechInfo.track_timebase;
+        let _: Option<String> = MediaTechInfo.channel_layout;
+        let _: Option<u32> = MediaTechInfo.video_packet_count;
+        let _: Option<u32> = MediaTechInfo.keyframe_count;
     }
     {
         let Project = None::<crate::api::Project>.unwrap();
@@ -1176,6 +1191,7 @@ impl SseDecode for crate::api::MediaMetadata {
         let mut var_pixelFormat = <Option<String>>::sse_decode(deserializer);
         let mut var_isVfr = <Option<bool>>::sse_decode(deserializer);
         let mut var_keyframePts = <Option<Vec<i64>>>::sse_decode(deserializer);
+        let mut var_tech = <Option<crate::api::MediaTechInfo>>::sse_decode(deserializer);
         return crate::api::MediaMetadata {
             width: var_width,
             height: var_height,
@@ -1190,6 +1206,7 @@ impl SseDecode for crate::api::MediaMetadata {
             pixel_format: var_pixelFormat,
             is_vfr: var_isVfr,
             keyframe_pts: var_keyframePts,
+            tech: var_tech,
         };
     }
 }
@@ -1199,6 +1216,36 @@ impl SseDecode for crate::api::MediaPool {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_items = <Vec<crate::api::MediaItem>>::sse_decode(deserializer);
         return crate::api::MediaPool { items: var_items };
+    }
+}
+
+impl SseDecode for crate::api::MediaTechInfo {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_contentHash = <String>::sse_decode(deserializer);
+        let mut var_container = <Option<String>>::sse_decode(deserializer);
+        let mut var_codedWidth = <Option<u32>>::sse_decode(deserializer);
+        let mut var_codedHeight = <Option<u32>>::sse_decode(deserializer);
+        let mut var_displayWidth = <Option<u32>>::sse_decode(deserializer);
+        let mut var_displayHeight = <Option<u32>>::sse_decode(deserializer);
+        let mut var_bitDepth = <Option<u8>>::sse_decode(deserializer);
+        let mut var_trackTimebase = <Option<crate::api::Rational>>::sse_decode(deserializer);
+        let mut var_channelLayout = <Option<String>>::sse_decode(deserializer);
+        let mut var_videoPacketCount = <Option<u32>>::sse_decode(deserializer);
+        let mut var_keyframeCount = <Option<u32>>::sse_decode(deserializer);
+        return crate::api::MediaTechInfo {
+            content_hash: var_contentHash,
+            container: var_container,
+            coded_width: var_codedWidth,
+            coded_height: var_codedHeight,
+            display_width: var_displayWidth,
+            display_height: var_displayHeight,
+            bit_depth: var_bitDepth,
+            track_timebase: var_trackTimebase,
+            channel_layout: var_channelLayout,
+            video_packet_count: var_videoPacketCount,
+            keyframe_count: var_keyframeCount,
+        };
     }
 }
 
@@ -1259,6 +1306,17 @@ impl SseDecode for Option<crate::api::BridgeFrame> {
     }
 }
 
+impl SseDecode for Option<crate::api::MediaTechInfo> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::MediaTechInfo>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::Rational> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1286,6 +1344,17 @@ impl SseDecode for Option<u32> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<u32>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<u8> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<u8>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -1588,6 +1657,7 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::MediaMetadata> {
             self.0.pixel_format.into_into_dart().into_dart(),
             self.0.is_vfr.into_into_dart().into_dart(),
             self.0.keyframe_pts.into_into_dart().into_dart(),
+            self.0.tech.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1617,6 +1687,36 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::MediaPool>>
     for crate::api::MediaPool
 {
     fn into_into_dart(self) -> FrbWrapper<crate::api::MediaPool> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::MediaTechInfo> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.content_hash.into_into_dart().into_dart(),
+            self.0.container.into_into_dart().into_dart(),
+            self.0.coded_width.into_into_dart().into_dart(),
+            self.0.coded_height.into_into_dart().into_dart(),
+            self.0.display_width.into_into_dart().into_dart(),
+            self.0.display_height.into_into_dart().into_dart(),
+            self.0.bit_depth.into_into_dart().into_dart(),
+            self.0.track_timebase.into_into_dart().into_dart(),
+            self.0.channel_layout.into_into_dart().into_dart(),
+            self.0.video_packet_count.into_into_dart().into_dart(),
+            self.0.keyframe_count.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::MediaTechInfo>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::MediaTechInfo>>
+    for crate::api::MediaTechInfo
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::MediaTechInfo> {
         self.into()
     }
 }
@@ -1961,6 +2061,7 @@ impl SseEncode for crate::api::MediaMetadata {
         <Option<String>>::sse_encode(self.pixel_format, serializer);
         <Option<bool>>::sse_encode(self.is_vfr, serializer);
         <Option<Vec<i64>>>::sse_encode(self.keyframe_pts, serializer);
+        <Option<crate::api::MediaTechInfo>>::sse_encode(self.tech, serializer);
     }
 }
 
@@ -1968,6 +2069,23 @@ impl SseEncode for crate::api::MediaPool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<crate::api::MediaItem>>::sse_encode(self.items, serializer);
+    }
+}
+
+impl SseEncode for crate::api::MediaTechInfo {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.content_hash, serializer);
+        <Option<String>>::sse_encode(self.container, serializer);
+        <Option<u32>>::sse_encode(self.coded_width, serializer);
+        <Option<u32>>::sse_encode(self.coded_height, serializer);
+        <Option<u32>>::sse_encode(self.display_width, serializer);
+        <Option<u32>>::sse_encode(self.display_height, serializer);
+        <Option<u8>>::sse_encode(self.bit_depth, serializer);
+        <Option<crate::api::Rational>>::sse_encode(self.track_timebase, serializer);
+        <Option<String>>::sse_encode(self.channel_layout, serializer);
+        <Option<u32>>::sse_encode(self.video_packet_count, serializer);
+        <Option<u32>>::sse_encode(self.keyframe_count, serializer);
     }
 }
 
@@ -2028,6 +2146,16 @@ impl SseEncode for Option<crate::api::BridgeFrame> {
     }
 }
 
+impl SseEncode for Option<crate::api::MediaTechInfo> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::MediaTechInfo>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::Rational> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2054,6 +2182,16 @@ impl SseEncode for Option<u32> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <u32>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<u8> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <u8>::sse_encode(value, serializer);
         }
     }
 }

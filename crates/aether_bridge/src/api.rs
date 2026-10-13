@@ -1,7 +1,7 @@
 use flutter_rust_bridge::frb;
 pub use aether_core::timeline::{Clip, Rational, Timeline, Track, TrackKind};
 pub use aether_core::project::Project;
-pub use aether_core::media::{MediaItem, MediaMetadata, MediaPool, MediaType};
+pub use aether_core::media::{MediaItem, MediaMetadata, MediaPool, MediaTechInfo, MediaType};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 pub use crate::frb_generated::StreamSink;
@@ -77,6 +77,23 @@ pub struct _MediaMetadata {
     pub pixel_format: Option<String>,
     pub is_vfr: Option<bool>,
     pub keyframe_pts: Option<Vec<i64>>,
+    pub tech: Option<MediaTechInfo>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(MediaTechInfo))]
+pub struct _MediaTechInfo {
+    pub content_hash: String,
+    pub container: Option<String>,
+    pub coded_width: Option<u32>,
+    pub coded_height: Option<u32>,
+    pub display_width: Option<u32>,
+    pub display_height: Option<u32>,
+    pub bit_depth: Option<u8>,
+    pub track_timebase: Option<Rational>,
+    pub channel_layout: Option<String>,
+    pub video_packet_count: Option<u32>,
+    pub keyframe_count: Option<u32>,
 }
 
 #[allow(dead_code)]

@@ -109,7 +109,7 @@ pub fn open_media_decoder_with_timebase(
             audio_codec: None,
             pixel_format: None,
             is_vfr: None,
-            keyframe_pts: None,
+            keyframe_pts: None, tech: None,
         };
         return Ok(Box::new(CompositeMediaDecoder::new(
             metadata,

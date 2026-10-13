@@ -57,6 +57,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MediaItem dco_decode_box_autoadd_media_item(dynamic raw);
 
   @protected
+  MediaTechInfo dco_decode_box_autoadd_media_tech_info(dynamic raw);
+
+  @protected
   Project dco_decode_box_autoadd_project(dynamic raw);
 
   @protected
@@ -70,6 +73,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
+  int dco_decode_box_autoadd_u_8(dynamic raw);
 
   @protected
   BridgeFrame dco_decode_bridge_frame(dynamic raw);
@@ -111,6 +117,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MediaPool dco_decode_media_pool(dynamic raw);
 
   @protected
+  MediaTechInfo dco_decode_media_tech_info(dynamic raw);
+
+  @protected
   MediaType dco_decode_media_type(dynamic raw);
 
   @protected
@@ -126,6 +135,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BridgeFrame? dco_decode_opt_box_autoadd_bridge_frame(dynamic raw);
 
   @protected
+  MediaTechInfo? dco_decode_opt_box_autoadd_media_tech_info(dynamic raw);
+
+  @protected
   Rational? dco_decode_opt_box_autoadd_rational(dynamic raw);
 
   @protected
@@ -133,6 +145,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_8(dynamic raw);
 
   @protected
   List<int>? dco_decode_opt_list_CastedPrimitive_i_64(dynamic raw);
@@ -209,6 +224,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MediaItem sse_decode_box_autoadd_media_item(SseDeserializer deserializer);
 
   @protected
+  MediaTechInfo sse_decode_box_autoadd_media_tech_info(
+      SseDeserializer deserializer);
+
+  @protected
   Project sse_decode_box_autoadd_project(SseDeserializer deserializer);
 
   @protected
@@ -222,6 +241,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_box_autoadd_u_8(SseDeserializer deserializer);
 
   @protected
   BridgeFrame sse_decode_bridge_frame(SseDeserializer deserializer);
@@ -263,6 +285,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MediaPool sse_decode_media_pool(SseDeserializer deserializer);
 
   @protected
+  MediaTechInfo sse_decode_media_tech_info(SseDeserializer deserializer);
+
+  @protected
   MediaType sse_decode_media_type(SseDeserializer deserializer);
 
   @protected
@@ -279,6 +304,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  MediaTechInfo? sse_decode_opt_box_autoadd_media_tech_info(
+      SseDeserializer deserializer);
+
+  @protected
   Rational? sse_decode_opt_box_autoadd_rational(SseDeserializer deserializer);
 
   @protected
@@ -286,6 +315,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_8(SseDeserializer deserializer);
 
   @protected
   List<int>? sse_decode_opt_list_CastedPrimitive_i_64(
@@ -367,6 +399,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       MediaItem self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_media_tech_info(
+      MediaTechInfo self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_project(Project self, SseSerializer serializer);
 
   @protected
@@ -380,6 +416,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_u_8(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_bridge_frame(BridgeFrame self, SseSerializer serializer);
@@ -424,6 +463,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_media_pool(MediaPool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_media_tech_info(MediaTechInfo self, SseSerializer serializer);
+
+  @protected
   void sse_encode_media_type(MediaType self, SseSerializer serializer);
 
   @protected
@@ -440,6 +482,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       BridgeFrame? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_media_tech_info(
+      MediaTechInfo? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_box_autoadd_rational(
       Rational? self, SseSerializer serializer);
 
@@ -448,6 +494,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_8(int? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_list_CastedPrimitive_i_64(

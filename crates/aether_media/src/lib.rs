@@ -3,7 +3,7 @@ use std::io::BufReader;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
-use aether_core::media::{MediaItem, MediaMetadata, MediaType};
+use aether_core::media::{MediaItem, MediaMetadata, MediaTechInfo, MediaType};
 use aether_core::timeline::Rational;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -60,6 +60,9 @@ pub struct MediaInspection {
     pub pixel_format: Option<String>,
     pub is_vfr: Option<bool>,
     pub keyframe_pts: Option<Vec<i64>>,
+    /// Deep-inspection data (filled by the ingest pipeline / container indexer).
+    #[serde(default)]
+    pub tech: Option<MediaTechInfo>,
 }
 
 impl MediaInspection {
@@ -78,6 +81,7 @@ impl MediaInspection {
             pixel_format: self.pixel_format.clone(),
             is_vfr: self.is_vfr,
             keyframe_pts: self.keyframe_pts.clone(),
+            tech: self.tech.clone(),
         }
     }
 
@@ -214,7 +218,7 @@ fn inspect_image(
         audio_codec: None,
         pixel_format: None,
         is_vfr: None,
-        keyframe_pts: None,
+        keyframe_pts: None, tech: None,
     })
 }
 
@@ -294,7 +298,7 @@ fn inspect_audio(
             audio_codec: None, // Could sniff later from track codec, but keeping simple for now
             pixel_format: None,
             is_vfr: None,
-            keyframe_pts: None,
+            keyframe_pts: None, tech: None,
         })
     }))
     .unwrap_or_else(|payload| {
@@ -463,6 +467,7 @@ fn inspect_video(
             pixel_format,
             is_vfr,
             keyframe_pts,
+            tech: None,
         })
     }))
     .unwrap_or_else(|payload| {
@@ -530,7 +535,7 @@ fn inspect_video(
                     audio_codec: None,
                     pixel_format: Some("bgra".to_string()), // AVFoundation outputs BGRA
                     is_vfr: None,       // Cannot determine without box-level parsing
-                    keyframe_pts: None, // Cannot extract without sample table access
+                    keyframe_pts: None, tech: None, // Cannot extract without sample table access
                 });
             }
             Err(avf_err) => {
