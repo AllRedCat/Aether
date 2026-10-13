@@ -42,8 +42,12 @@ pub const AETHER_PEAKS_VERSION: u32 = 2;
 /// Default base window size (LOD 0) in PCM frames per peak bin.
 pub const DEFAULT_BASE_SAMPLES_PER_PEAK: u32 = 256;
 
+/// Default reduction factor between consecutive LOD pyramid levels (4x).
+/// LOD 0 = 256 samples/pico, LOD 1 = 1024 samples/pico, LOD 2 = 4096 samples/pico.
+pub const DEFAULT_LOD_FACTOR: u32 = 4;
+
 /// Default number of mipmap LOD levels in the waveform pyramid
-/// (e.g. 256, 512, 1024, 2048, 4096, 8192 samples/bin).
+/// (e.g. 256, 1024, 4096, 16384, 65536, 262144 samples/bin with 4x reduction).
 pub const DEFAULT_LOD_LEVELS: usize = 6;
 
 const HEADER_FIXED_SIZE: usize = 32;
@@ -54,15 +58,19 @@ const PEAK_SAMPLE_BYTE_SIZE: usize = 12;
 /// Root-Mean-Square (RMS) energy in normalized `[-1.0, 1.0]` float range.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct AudioPeakSample {
-    pub min: f32,
-    pub max: f32,
-    pub rms: f32,
+pub struct AudioPeak {
+    pub min: f32, // Amplitude mínima no bloco (-1.0 a 0.0)
+    pub max: f32, // Amplitude máxima no bloco (0.0 a 1.0)
+    pub rms: f32, // Energia média (Root Mean Square)
 }
 
-const _: [(); 12] = [(); std::mem::size_of::<AudioPeakSample>()];
+const _: [(); 12] = [(); std::mem::size_of::<AudioPeak>()];
+const _: [(); 4] = [(); std::mem::align_of::<AudioPeak>()];
 
-impl AudioPeakSample {
+/// Backwards-compatible alias for [`AudioPeak`].
+pub type AudioPeakSample = AudioPeak;
+
+impl AudioPeak {
     #[inline]
     pub const fn new(min: f32, max: f32, rms: f32) -> Self {
         Self { min, max, rms }
@@ -81,12 +89,12 @@ impl AudioPeakSample {
 /// One level of detail (LOD) in the multi-resolution waveform pyramid.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AudioPeakLodLevel {
-    /// Zero-based LOD index (`0` = finest resolution, `k` = $2^k \times$ base window).
+    /// Zero-based LOD index (`0` = finest resolution, `k` = $4^k \times$ base window).
     pub lod: u32,
     /// Number of PCM frames aggregated per peak bin at this level.
     pub samples_per_peak: u32,
     /// Peak bins per audio channel (`channels[ch][bin_idx]`).
-    pub channels: Vec<Vec<AudioPeakSample>>,
+    pub channels: Vec<Vec<AudioPeak>>,
 }
 
 impl AudioPeakLodLevel {
@@ -576,31 +584,35 @@ impl WindowAccumulator {
     }
 }
 
-/// Downsamples an [`AudioPeakLodLevel`] by a factor of 2 (`2 * samples_per_peak`),
+/// Downsamples an [`AudioPeakLodLevel`] by a given factor (default 4x: 256 -> 1024 -> 4096),
 /// preserving exact `min`/`max` envelopes and quadratic-mean `rms`.
-pub fn downsample_lod_level(prev: &AudioPeakLodLevel, next_lod: u32) -> AudioPeakLodLevel {
-    let next_spp = prev.samples_per_peak.saturating_mul(2);
+pub fn downsample_lod_level_with_factor(
+    prev: &AudioPeakLodLevel,
+    next_lod: u32,
+    factor: u32,
+) -> AudioPeakLodLevel {
+    let f = (factor as usize).max(2);
+    let next_spp = prev.samples_per_peak.saturating_mul(factor);
     let mut next_channels = Vec::with_capacity(prev.channels.len());
 
     for ch in &prev.channels {
-        let out_len = (ch.len() + 1) / 2;
+        let out_len = (ch.len() + f - 1) / f;
         let mut out = Vec::with_capacity(out_len);
-        let mut i = 0;
-        while i < ch.len() {
-            let a = ch[i];
-            if i + 1 < ch.len() {
-                let b = ch[i + 1];
-                let min = a.min.min(b.min);
-                let max = a.max.max(b.max);
-                let rms = ((((a.rms as f64) * (a.rms as f64) + (b.rms as f64) * (b.rms as f64))
-                    * 0.5)
-                    .sqrt() as f32)
-                    .clamp(0.0, 1.0);
-                out.push(AudioPeakSample::new(min, max, rms));
-            } else {
-                out.push(a);
+        for chunk in ch.chunks(f) {
+            let mut min_v = f32::MAX;
+            let mut max_v = f32::MIN;
+            let mut sum_sq = 0.0f64;
+            for p in chunk {
+                if p.min < min_v {
+                    min_v = p.min;
+                }
+                if p.max > max_v {
+                    max_v = p.max;
+                }
+                sum_sq += (p.rms as f64) * (p.rms as f64);
             }
-            i += 2;
+            let rms = ((sum_sq / (chunk.len() as f64)).sqrt() as f32).clamp(0.0, 1.0);
+            out.push(AudioPeak::new(min_v, max_v, rms));
         }
         next_channels.push(out);
     }
@@ -612,17 +624,31 @@ pub fn downsample_lod_level(prev: &AudioPeakLodLevel, next_lod: u32) -> AudioPea
     }
 }
 
-/// Builds a multi-level LOD chain starting from `base_level` (LOD 0).
+/// Downsamples an [`AudioPeakLodLevel`] by the default 4x factor (256 -> 1024 -> 4096).
+pub fn downsample_lod_level(prev: &AudioPeakLodLevel, next_lod: u32) -> AudioPeakLodLevel {
+    downsample_lod_level_with_factor(prev, next_lod, DEFAULT_LOD_FACTOR)
+}
+
+/// Builds a multi-level LOD chain starting from `base_level` (LOD 0) using 4x downsampling.
 pub fn build_lod_chain_from_base(
     base_level: AudioPeakLodLevel,
     lod_count: usize,
+) -> Vec<AudioPeakLodLevel> {
+    build_lod_chain_from_base_with_factor(base_level, lod_count, DEFAULT_LOD_FACTOR)
+}
+
+/// Builds a multi-level LOD chain starting from `base_level` (LOD 0) with a custom downsampling factor.
+pub fn build_lod_chain_from_base_with_factor(
+    base_level: AudioPeakLodLevel,
+    lod_count: usize,
+    factor: u32,
 ) -> Vec<AudioPeakLodLevel> {
     let total_levels = lod_count.max(1);
     let mut levels = Vec::with_capacity(total_levels);
     levels.push(base_level);
 
     for lod_idx in 1..total_levels {
-        let next = downsample_lod_level(&levels[lod_idx - 1], lod_idx as u32);
+        let next = downsample_lod_level_with_factor(&levels[lod_idx - 1], lod_idx as u32, factor);
         levels.push(next);
     }
 
@@ -652,7 +678,7 @@ pub fn build_peak_pyramid_from_interleaved(
         .checked_div(base_samples_per_peak as usize)
         .unwrap_or(0);
 
-    let mut base_channels: Vec<Vec<AudioPeakSample>> =
+    let mut base_channels: Vec<Vec<AudioPeak>> =
         (0..channels).map(|_| Vec::with_capacity(est_bins)).collect();
     let mut accumulators = vec![WindowAccumulator::new(); channels];
 
@@ -723,7 +749,17 @@ pub fn generate_waveform_cache_pyramid(
         0
     };
 
-    let mut base_channels: Vec<Vec<AudioPeakSample>> = vec![Vec::new(); channels];
+    // Preallocate a bounded initial capacity if duration is known (~at most 2M bins per channel)
+    // to avoid continuous Vec reallocations during long file processing, while guarding against
+    // memory exhaustion on corrupt metadata.
+    let initial_cap = if estimated_total_frames > 0 && base_samples_per_peak > 0 {
+        ((estimated_total_frames / base_samples_per_peak as u64) as usize).min(2 * 1024 * 1024)
+    } else {
+        1024
+    };
+
+    let mut base_channels: Vec<Vec<AudioPeak>> =
+        (0..channels).map(|_| Vec::with_capacity(initial_cap)).collect();
     let mut accumulators = vec![WindowAccumulator::new(); channels];
     let mut decoded_frames = 0u64;
 
@@ -987,8 +1023,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let peak_path = dir.path().join("pyramid.peak");
 
-        // 4096 stereo frames (256 samples/bin -> 16 bins at LOD0, 8 at LOD1, 4 at LOD2, 2 at LOD3, 1 at LOD4)
-        let frames = 4096usize;
+        // 16384 stereo frames (256 samples/bin -> 64 bins at LOD0, 16 at LOD1 (1024), 4 at LOD2 (4096), 1 at LOD3 (16384))
+        let frames = 16384usize;
         let mut interleaved = Vec::with_capacity(frames * 2);
         for i in 0..frames {
             let phase = 2.0 * std::f32::consts::PI * (i as f32) / 256.0;
@@ -1000,12 +1036,20 @@ mod tests {
             build_peak_pyramid_from_interleaved(&interleaved, 2, 48_000, 256, 5).unwrap();
         assert_eq!(pyramid.channels, 2);
         assert_eq!(pyramid.sample_rate, 48_000);
-        assert_eq!(pyramid.total_frames, 4096);
+        assert_eq!(pyramid.total_frames, 16384);
         assert_eq!(pyramid.levels.len(), 5);
-        assert_eq!(pyramid.levels[0].bins_per_channel(), 16);
-        assert_eq!(pyramid.levels[1].bins_per_channel(), 8);
+
+        // Verify exact 4x LOD mipmap progression: 256 -> 1024 -> 4096 -> 16384 -> 65536
+        assert_eq!(pyramid.levels[0].samples_per_peak, 256);
+        assert_eq!(pyramid.levels[1].samples_per_peak, 1024);
+        assert_eq!(pyramid.levels[2].samples_per_peak, 4096);
+        assert_eq!(pyramid.levels[3].samples_per_peak, 16384);
+        assert_eq!(pyramid.levels[4].samples_per_peak, 65536);
+
+        assert_eq!(pyramid.levels[0].bins_per_channel(), 64);
+        assert_eq!(pyramid.levels[1].bins_per_channel(), 16);
         assert_eq!(pyramid.levels[2].bins_per_channel(), 4);
-        assert_eq!(pyramid.levels[3].bins_per_channel(), 2);
+        assert_eq!(pyramid.levels[3].bins_per_channel(), 1);
         assert_eq!(pyramid.levels[4].bins_per_channel(), 1);
 
         pyramid.save_to_file(&peak_path).unwrap();
@@ -1015,6 +1059,8 @@ mod tests {
         // Selective single-LOD read from disk
         let lod2 = AudioPeakPyramid::load_lod_from_file(&peak_path, 2).unwrap();
         assert_eq!(lod2, pyramid.levels[2]);
+        assert_eq!(lod2.samples_per_peak, 4096);
+        assert_eq!(lod2.bins_per_channel(), 4);
     }
 
     #[test]

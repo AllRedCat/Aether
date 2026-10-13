@@ -311,9 +311,12 @@ class TimelineView extends ConsumerWidget {
     required bool isSelected,
   }) {
     final isAudioTrack = track.kind == TrackKind.audio;
+    final zoom = ref.watch(timelineZoomProvider);
+    final lod = computeAudioLodForZoom(zoom);
+
     final waveformAsync = ref.watch(
       clipWaveformProvider(
-        WaveformQuery(assetId: clip.sourceId.uuid, lod: 0),
+        WaveformQuery(assetId: clip.sourceId.uuid, channel: 0, lod: lod),
       ),
     );
     final peaks = waveformAsync.valueOrNull ?? const <AudioPeak>[];
@@ -411,15 +414,22 @@ class TimelineView extends ConsumerWidget {
 /// CustomPainter that renders an audio waveform directly from the pre-computed
 /// `List<AudioPeak>` (`min`, `max`, `rms`) returned by the Rust `.peak` sidecar
 /// cache over FFI, without reading or decoding the original audio file.
+///
+/// Uses batched `Path` operations for peak bars filled with transparency and
+/// a highlighted RMS contour/energy layer, delivering jank-free 60+ FPS rendering.
 class AudioWaveformPainter extends CustomPainter {
   final List<AudioPeak> peaks;
   final Color waveColor;
   final Color rmsColor;
+  final double barWidth;
+  final double barGap;
 
   const AudioWaveformPainter({
     required this.peaks,
     required this.waveColor,
     required this.rmsColor,
+    this.barWidth = 2.0,
+    this.barGap = 1.0,
   });
 
   @override
@@ -430,7 +440,7 @@ class AudioWaveformPainter extends CustomPainter {
     final halfH = size.height / 2.0;
 
     final baselinePaint = Paint()
-      ..color = waveColor.withValues(alpha: 0.25)
+      ..color = waveColor.withValues(alpha: 0.20)
       ..strokeWidth = 1.0;
     canvas.drawLine(
       Offset(0, midY),
@@ -440,18 +450,17 @@ class AudioWaveformPainter extends CustomPainter {
 
     if (peaks.isEmpty) return;
 
-    final peakPaint = Paint()
-      ..color = waveColor
-      ..strokeWidth = 1.2
-      ..strokeCap = StrokeCap.round;
-
-    final rmsPaint = Paint()
-      ..color = rmsColor.withValues(alpha: 0.9)
-      ..strokeWidth = 1.2
-      ..strokeCap = StrokeCap.round;
-
-    final columns = size.width.floor().clamp(1, 512);
+    final step = (barWidth + barGap).clamp(1.0, size.width);
+    final columns = (size.width / step).floor().clamp(1, 512);
     final binsPerCol = peaks.length / columns;
+
+    final minMaxPath = Path();
+    final rmsTopPath = Path();
+    final rmsBottomPath = Path();
+    final rmsBarsPath = Path();
+
+    bool hasRms = false;
+    bool isFirstRms = true;
 
     for (int col = 0; col < columns; col++) {
       final startBin = (col * binsPerCol).floor().clamp(0, peaks.length - 1);
@@ -475,17 +484,71 @@ class AudioWaveformPainter extends CustomPainter {
       maxVal = maxVal.clamp(-1.0, 1.0);
       final rmsVal = count > 0 ? (rmsSum / count).clamp(0.0, 1.0) : 0.0;
 
-      final x = (col + 0.5) * (size.width / columns);
+      final x = col * step + (barWidth / 2.0);
+      if (x > size.width) break;
+
       final topY = (midY - (maxVal * halfH)).clamp(0.0, size.height);
       final bottomY = (midY - (minVal * halfH)).clamp(0.0, size.height);
 
-      canvas.drawLine(Offset(x, topY), Offset(x, bottomY), peakPaint);
+      // Min/Max bar added to the batched path with rounded caps
+      minMaxPath.addRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTRB(x - barWidth / 2.0, topY, x + barWidth / 2.0, bottomY),
+          const Radius.circular(0.75),
+        ),
+      );
 
       if (rmsVal > 0.0) {
+        hasRms = true;
         final rmsTopY = (midY - (rmsVal * halfH)).clamp(0.0, size.height);
         final rmsBottomY = (midY + (rmsVal * halfH)).clamp(0.0, size.height);
-        canvas.drawLine(Offset(x, rmsTopY), Offset(x, rmsBottomY), rmsPaint);
+
+        rmsBarsPath.addRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTRB(
+              x - (barWidth * 0.75) / 2.0,
+              rmsTopY,
+              x + (barWidth * 0.75) / 2.0,
+              rmsBottomY,
+            ),
+            const Radius.circular(0.75),
+          ),
+        );
+
+        if (isFirstRms) {
+          rmsTopPath.moveTo(x, rmsTopY);
+          rmsBottomPath.moveTo(x, rmsBottomY);
+          isFirstRms = false;
+        } else {
+          rmsTopPath.lineTo(x, rmsTopY);
+          rmsBottomPath.lineTo(x, rmsBottomY);
+        }
       }
+    }
+
+    // 1. Batched Min/Max bars filled with transparency
+    final minMaxPaint = Paint()
+      ..color = waveColor.withValues(alpha: 0.35)
+      ..style = PaintingStyle.fill;
+    canvas.drawPath(minMaxPath, minMaxPaint);
+
+    // 2. Batched RMS energy highlight bars
+    final rmsBarPaint = Paint()
+      ..color = rmsColor.withValues(alpha: 0.75)
+      ..style = PaintingStyle.fill;
+    canvas.drawPath(rmsBarsPath, rmsBarPaint);
+
+    // 3. Batched RMS prominent contour envelope outline
+    if (hasRms) {
+      final rmsContourPaint = Paint()
+        ..color = rmsColor
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+
+      canvas.drawPath(rmsTopPath, rmsContourPaint);
+      canvas.drawPath(rmsBottomPath, rmsContourPaint);
     }
   }
 
@@ -494,6 +557,8 @@ class AudioWaveformPainter extends CustomPainter {
     return !identical(oldDelegate.peaks, peaks) ||
         oldDelegate.peaks.length != peaks.length ||
         oldDelegate.waveColor != waveColor ||
-        oldDelegate.rmsColor != rmsColor;
+        oldDelegate.rmsColor != rmsColor ||
+        oldDelegate.barWidth != barWidth ||
+        oldDelegate.barGap != barGap;
   }
 }

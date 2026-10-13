@@ -217,6 +217,7 @@ class FakeRustLibApi implements RustLibApi {
   @override
   Future<List<AudioPeak>> crateApiGetAudioWaveform({
     required String assetId,
+    required int channel,
     required int lod,
   }) async {
     return const [
@@ -416,7 +417,7 @@ void main() {
           overrides: [
             timelineProvider.overrideWith((ref) => notifier),
             audioWaveformFetcherProvider.overrideWithValue(
-                ({required String assetId, required int lod}) async {
+                ({required String assetId, required int channel, required int lod}) async {
               requestedAssetId = assetId;
               requestedLod = lod;
               return expectedPeaks;

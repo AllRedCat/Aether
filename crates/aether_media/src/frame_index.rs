@@ -10,14 +10,14 @@ use aether_core::timeline::Rational;
 use crate::cache::write_atomic;
 use crate::MediaError;
 
-/// Magic header bytes for a persisted `.fidx` binary frame index file.
+/// Magic header bytes for a persisted `.index` binary frame index file.
 pub const FRAME_INDEX_MAGIC: &[u8; 8] = b"AETHFIDX";
-/// Current `.fidx` binary format version.
-pub const FRAME_INDEX_VERSION: u32 = 1;
+/// Current binary format version (version 2 adds DTS to FrameIndexEntry for 32-byte layout).
+pub const FRAME_INDEX_VERSION: u32 = 2;
 /// Fixed header size in bytes before the contiguous `FrameIndexEntry` array.
 pub const FRAME_INDEX_HEADER_SIZE: usize = 64;
 /// Fixed size in bytes of a single [`FrameIndexEntry`].
-pub const FRAME_INDEX_ENTRY_SIZE: usize = 24;
+pub const FRAME_INDEX_ENTRY_SIZE: usize = 32;
 /// Upper safety cap on entries loaded from disk (~16M frames ≈ 77 hours @ 60fps)
 /// to prevent crafted headers from triggering multi-gigabyte allocations.
 pub const MAX_FRAME_INDEX_ENTRIES: u64 = 16 * 1024 * 1024;
@@ -27,32 +27,35 @@ pub const FLAG_IS_KEYFRAME: u8 = 1 << 0;
 /// Bit 1 of [`FrameIndexEntry::flags`]: packet is disposable (non-reference B-frame).
 pub const FLAG_IS_DISPOSABLE: u8 = 1 << 1;
 
-/// Fixed 24-byte binary record describing a single compressed video packet in
+/// Fixed 32-byte binary record describing a single compressed video packet in
 /// presentation order.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameIndexEntry {
     /// Presentation timestamp (in the index's timebase).
     pub pts: i64,
+    /// Decode timestamp (in the index's timebase).
+    pub dts: i64,
     /// Byte offset of the compressed packet in the source media container.
     pub file_offset: u64,
     /// Compressed packet size in bytes.
     pub packet_size: u32,
     /// Bitfield: Bit 0 = `Is_Keyframe` (I/IDR), Bit 1 = `Is_Disposable`.
     pub flags: u8,
-    /// Explicit padding to guarantee 24-byte alignment across all platforms.
+    /// Explicit padding to guarantee 32-byte alignment across all platforms.
     pub _pad: [u8; 3],
 }
 
-// Compile-time guarantee that `FrameIndexEntry` is exactly 24 bytes with 8-byte alignment.
+// Compile-time guarantee that `FrameIndexEntry` is exactly 32 bytes with 8-byte alignment.
 const _: [(); FRAME_INDEX_ENTRY_SIZE] = [(); std::mem::size_of::<FrameIndexEntry>()];
 const _: [(); 8] = [(); std::mem::align_of::<FrameIndexEntry>()];
 
 impl FrameIndexEntry {
-    /// Constructs a new 24-byte [`FrameIndexEntry`] with zeroed padding bytes.
+    /// Constructs a new 32-byte [`FrameIndexEntry`] with zeroed padding bytes.
     #[inline]
     pub const fn new(
         pts: i64,
+        dts: i64,
         file_offset: u64,
         packet_size: u32,
         is_keyframe: bool,
@@ -67,6 +70,7 @@ impl FrameIndexEntry {
         }
         Self {
             pts,
+            dts,
             file_offset,
             packet_size,
             flags,
@@ -86,14 +90,16 @@ impl FrameIndexEntry {
         (self.flags & FLAG_IS_DISPOSABLE) != 0
     }
 
-    /// Serializes this entry into 24 little-endian bytes.
+    /// Serializes this entry into 32 little-endian bytes.
     #[inline]
     pub const fn to_le_bytes(self) -> [u8; FRAME_INDEX_ENTRY_SIZE] {
         let pts = self.pts.to_le_bytes();
+        let dts = self.dts.to_le_bytes();
         let off = self.file_offset.to_le_bytes();
         let sz = self.packet_size.to_le_bytes();
         [
             pts[0], pts[1], pts[2], pts[3], pts[4], pts[5], pts[6], pts[7],
+            dts[0], dts[1], dts[2], dts[3], dts[4], dts[5], dts[6], dts[7],
             off[0], off[1], off[2], off[3], off[4], off[5], off[6], off[7],
             sz[0], sz[1], sz[2], sz[3],
             self.flags,
@@ -101,16 +107,18 @@ impl FrameIndexEntry {
         ]
     }
 
-    /// Deserializes an entry from 24 little-endian bytes.
+    /// Deserializes an entry from 32 little-endian bytes.
     #[inline]
     pub const fn from_le_bytes(b: [u8; FRAME_INDEX_ENTRY_SIZE]) -> Self {
         let pts = i64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+        let dts = i64::from_le_bytes([b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]]);
         let file_offset =
-            u64::from_le_bytes([b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]]);
-        let packet_size = u32::from_le_bytes([b[16], b[17], b[18], b[19]]);
-        let flags = b[20];
+            u64::from_le_bytes([b[16], b[17], b[18], b[19], b[20], b[21], b[22], b[23]]);
+        let packet_size = u32::from_le_bytes([b[24], b[25], b[26], b[27]]);
+        let flags = b[28];
         Self {
             pts,
+            dts,
             file_offset,
             packet_size,
             flags,
@@ -120,7 +128,7 @@ impl FrameIndexEntry {
 }
 
 /// Encodes a slice of [`FrameIndexEntry`] records into a flat contiguous
-/// little-endian byte buffer (`entries.len() * 24` bytes, without file header).
+/// little-endian byte buffer (`entries.len() * 32` bytes, without file header).
 pub fn encode_entries_raw(entries: &[FrameIndexEntry]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(entries.len() * FRAME_INDEX_ENTRY_SIZE);
     for e in entries {
@@ -223,6 +231,7 @@ impl FrameIndex {
             a.pts
                 .cmp(&b.pts)
                 .then_with(|| b.is_keyframe().cmp(&a.is_keyframe()))
+                .then_with(|| a.dts.cmp(&b.dts))
                 .then_with(|| a.file_offset.cmp(&b.file_offset))
         });
 
@@ -318,7 +327,7 @@ impl FrameIndex {
         Some(&self.entries[upper - 1])
     }
 
-    /// Serializes the header + contiguous 24-byte [`FrameIndexEntry`] table into bytes.
+    /// Serializes the header + contiguous 32-byte [`FrameIndexEntry`] table into bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         let total = FRAME_INDEX_HEADER_SIZE + self.entries.len() * FRAME_INDEX_ENTRY_SIZE;
         let mut out = Vec::with_capacity(total);
@@ -356,14 +365,14 @@ impl FrameIndex {
             )));
         }
 
-        if &bytes[0..8] != FRAME_INDEX_MAGIC {
+        if &bytes[0..8] != FRAME_INDEX_MAGIC && &bytes[0..8] != b"AETHINDX" {
             return Err(MediaError::CorruptFile(
                 "Invalid frame index magic header".to_string(),
             ));
         }
 
         let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
-        if version != FRAME_INDEX_VERSION {
+        if version != FRAME_INDEX_VERSION && version != 1 {
             return Err(MediaError::CorruptFile(format!(
                 "Unsupported frame index version: {} (expected {})",
                 version, FRAME_INDEX_VERSION
@@ -391,20 +400,41 @@ impl FrameIndex {
         source_digest.copy_from_slice(&bytes[32..64]);
 
         let payload = &bytes[FRAME_INDEX_HEADER_SIZE..];
-        let expected_payload_bytes = (entry_count as usize)
-            .checked_mul(FRAME_INDEX_ENTRY_SIZE)
-            .ok_or_else(|| MediaError::CorruptFile("Frame index size overflow".to_string()))?;
 
-        if payload.len() != expected_payload_bytes {
-            return Err(MediaError::CorruptFile(format!(
-                "Frame index payload truncated or mismatched: expected {} bytes for {} entries, got {} bytes",
-                expected_payload_bytes,
-                entry_count,
-                payload.len()
-            )));
-        }
+        let entries = if version == 1 && payload.len() == (entry_count as usize) * 24 {
+            let mut legacy_entries = Vec::with_capacity(entry_count as usize);
+            for chunk in payload.chunks_exact(24) {
+                let pts = i64::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7]]);
+                let file_offset = u64::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11], chunk[12], chunk[13], chunk[14], chunk[15]]);
+                let packet_size = u32::from_le_bytes([chunk[16], chunk[17], chunk[18], chunk[19]]);
+                let flags = chunk[20];
+                legacy_entries.push(FrameIndexEntry {
+                    pts,
+                    dts: pts,
+                    file_offset,
+                    packet_size,
+                    flags,
+                    _pad: [0u8; 3],
+                });
+            }
+            legacy_entries
+        } else {
+            let expected_payload_bytes = (entry_count as usize)
+                .checked_mul(FRAME_INDEX_ENTRY_SIZE)
+                .ok_or_else(|| MediaError::CorruptFile("Frame index size overflow".to_string()))?;
 
-        let entries = decode_entries_raw(payload)?;
+            if payload.len() != expected_payload_bytes {
+                return Err(MediaError::CorruptFile(format!(
+                    "Frame index payload truncated or mismatched: expected {} bytes for {} entries, got {} bytes",
+                    expected_payload_bytes,
+                    entry_count,
+                    payload.len()
+                )));
+            }
+
+            decode_entries_raw(payload)?
+        };
+
         Ok(Self::new(
             Rational {
                 num: tb_num,
@@ -458,28 +488,38 @@ mod tests {
         // 2 GOPs of 5 frames each (at 60fps: PTS = 0, 1, 2, 3, 4 | 5, 6, 7, 8, 9)
         // Keyframes at PTS 0 and PTS 5; B-frames at PTS 1, 2, 6, 7 marked disposable.
         vec![
-            FrameIndexEntry::new(0, 1024, 12_000, true, false),
-            FrameIndexEntry::new(1, 13_024, 1_500, false, true),
-            FrameIndexEntry::new(2, 14_524, 1_600, false, true),
-            FrameIndexEntry::new(3, 16_124, 4_200, false, false),
-            FrameIndexEntry::new(4, 20_324, 4_100, false, false),
-            FrameIndexEntry::new(5, 24_424, 11_800, true, false),
-            FrameIndexEntry::new(6, 36_224, 1_400, false, true),
-            FrameIndexEntry::new(7, 37_624, 1_450, false, true),
-            FrameIndexEntry::new(8, 39_074, 3_900, false, false),
-            FrameIndexEntry::new(9, 42_974, 4_000, false, false),
+            FrameIndexEntry::new(0, 0, 1024, 12_000, true, false),
+            FrameIndexEntry::new(1, 1, 13_024, 1_500, false, true),
+            FrameIndexEntry::new(2, 2, 14_524, 1_600, false, true),
+            FrameIndexEntry::new(3, 3, 16_124, 4_200, false, false),
+            FrameIndexEntry::new(4, 4, 20_324, 4_100, false, false),
+            FrameIndexEntry::new(5, 5, 24_424, 11_800, true, false),
+            FrameIndexEntry::new(6, 6, 36_224, 1_400, false, true),
+            FrameIndexEntry::new(7, 7, 37_624, 1_450, false, true),
+            FrameIndexEntry::new(8, 8, 39_074, 3_900, false, false),
+            FrameIndexEntry::new(9, 9, 42_974, 4_000, false, false),
         ]
     }
 
     #[test]
-    fn entry_layout_is_24_bytes_and_flags_roundtrip() {
-        assert_eq!(std::mem::size_of::<FrameIndexEntry>(), 24);
-        let kf = FrameIndexEntry::new(120, 65_536, 48_123, true, false);
+    fn entry_layout_is_32_bytes_and_fields_roundtrip() {
+        assert_eq!(std::mem::size_of::<FrameIndexEntry>(), 32);
+        assert_eq!(std::mem::align_of::<FrameIndexEntry>(), 8);
+
+        let kf = FrameIndexEntry::new(120, 118, 65_536, 48_123, true, false);
+        assert_eq!(kf.pts, 120);
+        assert_eq!(kf.dts, 118);
+        assert_eq!(kf.file_offset, 65_536);
+        assert_eq!(kf.packet_size, 48_123);
         assert!(kf.is_keyframe());
         assert!(!kf.is_disposable());
         assert_eq!(FrameIndexEntry::from_le_bytes(kf.to_le_bytes()), kf);
 
-        let bframe = FrameIndexEntry::new(121, 113_659, 2_048, false, true);
+        let bframe = FrameIndexEntry::new(121, 119, 113_659, 2_048, false, true);
+        assert_eq!(bframe.pts, 121);
+        assert_eq!(bframe.dts, 119);
+        assert_eq!(bframe.file_offset, 113_659);
+        assert_eq!(bframe.packet_size, 2_048);
         assert!(!bframe.is_keyframe());
         assert!(bframe.is_disposable());
         assert_eq!(FrameIndexEntry::from_le_bytes(bframe.to_le_bytes()), bframe);
@@ -488,7 +528,7 @@ mod tests {
     #[test]
     fn binary_serialization_and_file_persistence_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("index").join("sample.fidx");
+        let path = dir.path().join("index").join("sample.index");
         let digest = [0x42u8; 32];
         let tb = Rational { num: 60, den: 1 };
 
@@ -512,10 +552,56 @@ mod tests {
         raw.truncate(raw.len() - 5);
         assert!(FrameIndex::from_bytes(&raw).is_err());
 
+        // Header too short must error cleanly
+        assert!(FrameIndex::from_bytes(&raw[..30]).is_err());
+
         // Bad magic must error cleanly
         let mut bad_magic = index.to_bytes();
         bad_magic[0] = b'X';
         assert!(FrameIndex::from_bytes(&bad_magic).is_err());
+
+        // Invalid timebase must error cleanly
+        let mut bad_tb = index.to_bytes();
+        bad_tb[12..16].copy_from_slice(&0i32.to_le_bytes());
+        assert!(FrameIndex::from_bytes(&bad_tb).is_err());
+    }
+
+    #[test]
+    fn legacy_v1_24_byte_index_migrates_cleanly() {
+        // Construct a valid v1 24-byte index buffer
+        let tb = Rational { num: 60, den: 1 };
+        let digest = [0x77u8; 32];
+        let mut raw = Vec::new();
+        raw.extend_from_slice(FRAME_INDEX_MAGIC);
+        raw.extend_from_slice(&1u32.to_le_bytes()); // version 1
+        raw.extend_from_slice(&tb.num.to_le_bytes());
+        raw.extend_from_slice(&tb.den.to_le_bytes());
+        raw.extend_from_slice(&0u32.to_le_bytes());
+        raw.extend_from_slice(&2u64.to_le_bytes()); // 2 entries
+        raw.extend_from_slice(&digest);
+
+        // Entry 0 (24 bytes)
+        raw.extend_from_slice(&0i64.to_le_bytes()); // pts
+        raw.extend_from_slice(&1000u64.to_le_bytes()); // file_offset
+        raw.extend_from_slice(&500u32.to_le_bytes()); // packet_size
+        raw.push(FLAG_IS_KEYFRAME);
+        raw.extend_from_slice(&[0u8; 3]);
+
+        // Entry 1 (24 bytes)
+        raw.extend_from_slice(&1i64.to_le_bytes()); // pts
+        raw.extend_from_slice(&1500u64.to_le_bytes()); // file_offset
+        raw.extend_from_slice(&300u32.to_le_bytes()); // packet_size
+        raw.push(FLAG_IS_DISPOSABLE);
+        raw.extend_from_slice(&[0u8; 3]);
+
+        let loaded = FrameIndex::from_bytes(&raw).expect("v1 migration should succeed");
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded.entries()[0].pts, 0);
+        assert_eq!(loaded.entries()[0].dts, 0);
+        assert!(loaded.entries()[0].is_keyframe());
+        assert_eq!(loaded.entries()[1].pts, 1);
+        assert_eq!(loaded.entries()[1].dts, 1);
+        assert!(loaded.entries()[1].is_disposable());
     }
 
     #[test]
@@ -581,7 +667,7 @@ mod tests {
         let no_kf = FrameIndex::new(
             Rational { num: 60, den: 1 },
             [0u8; 32],
-            vec![FrameIndexEntry::new(10, 100, 50, false, false)],
+            vec![FrameIndexEntry::new(10, 10, 100, 50, false, false)],
         );
         assert!(no_kf.find_keyframe_at_or_before(10).is_none());
         assert!(no_kf.seek_keyframe(10).is_none());
@@ -594,6 +680,7 @@ mod tests {
         let mut entries = Vec::with_capacity(count);
         for i in 0..count {
             entries.push(FrameIndexEntry::new(
+                i as i64,
                 i as i64,
                 (i as u64) * 4096,
                 4096,

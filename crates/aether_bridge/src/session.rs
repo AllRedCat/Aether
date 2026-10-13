@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
@@ -8,6 +8,10 @@ use std::time::Duration;
 use aether_core::media::MediaType;
 use aether_core::timeline::Rational;
 use aether_media::decoder::traits::MediaDecoder;
+use aether_media::frame_index::FrameIndex;
+use aether_media::playback::{
+    FrameAction, FrameDropper, LookaheadRingBuffer, MasterClock, DEFAULT_LOOKAHEAD_CAPACITY,
+};
 
 use crate::api::{BridgeFrame, PlaybackState, PreviewSessionInfo};
 pub use crate::frb_generated::StreamSink;
@@ -20,7 +24,8 @@ pub enum PlaybackTickStatus {
     EndOfStream,
 }
 
-/// Represents an active media preview playback session.
+/// Represents an active media preview playback session featuring a decoupled
+/// lookahead ring buffer, audio master clock synchronization, and frame dropping.
 pub struct PlaybackSession {
     pub session_id: String,
     pub texture_id: i64,
@@ -35,11 +40,15 @@ pub struct PlaybackSession {
 
     pub is_playing: Arc<AtomicBool>,
     pub current_pts: Arc<AtomicI64>,
+    pub lookahead_buffer: Arc<LookaheadRingBuffer>,
+    pub master_clock: Arc<MasterClock>,
+    pub frame_index: Option<Arc<FrameIndex>>,
 
-    decoder: Mutex<Box<dyn MediaDecoder>>,
+    current_epoch: AtomicU64,
+    worker_shutdown: Arc<AtomicBool>,
+    decoder: Arc<Mutex<Box<dyn MediaDecoder>>>,
     frame_sinks: Mutex<Vec<StreamSink<BridgeFrame>>>,
     state_sinks: Mutex<Vec<StreamSink<PlaybackState>>>,
-    ticker_stop_tx: Mutex<Option<std::sync::mpsc::Sender<()>>>,
     last_frame: Mutex<Option<BridgeFrame>>,
 }
 
@@ -88,6 +97,11 @@ impl PlaybackSession {
         self.last_frame.lock().ok().and_then(|g| g.clone())
     }
 
+    /// Returns total count of frames dropped by the presentation engine due to deadlines.
+    pub fn dropped_frames(&self) -> u64 {
+        self.lookahead_buffer.dropped_frames()
+    }
+
     /// Subscribes a new StreamSink for video frames.
     /// Emits the cached initial/last frame immediately so the UI is responsive.
     pub fn subscribe_frames(&self, sink: StreamSink<BridgeFrame>) {
@@ -124,7 +138,7 @@ impl PlaybackSession {
         }
     }
 
-    /// Starts sequential playback at the media's native frame rate.
+    /// Starts sequential playback governed by the master clock.
     pub fn play(self: &Arc<Self>) -> Result<(), String> {
         // If at or beyond EOS, restart from beginning
         if self.current_pts.load(Ordering::SeqCst) >= self.duration_pts {
@@ -136,82 +150,212 @@ impl PlaybackSession {
             return Ok(());
         }
 
-        // Stop any dangling ticker thread
-        self.stop_ticker();
-
-        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
-        if let Ok(mut tx_slot) = self.ticker_stop_tx.lock() {
-            *tx_slot = Some(stop_tx);
-        }
-
+        let cur = self.current_pts.load(Ordering::SeqCst);
+        self.master_clock.start(cur);
         self.broadcast_state();
+        Ok(())
+    }
 
-        let session = Arc::clone(self);
-        let fps = if session.fps > 0.0 { session.fps } else { 60.0 };
-        let frame_interval = Duration::from_secs_f64(1.0 / fps);
+    /// Pauses sequential playback without killing background worker threads.
+    pub fn pause(&self) -> Result<(), String> {
+        self.is_playing.store(false, Ordering::SeqCst);
+        let paused_pts = self.master_clock.pause();
+        self.current_pts
+            .store(paused_pts.clamp(0, self.duration_pts), Ordering::SeqCst);
+        self.broadcast_state();
+        Ok(())
+    }
 
-        thread::Builder::new()
-            .name(format!("aether-playback-{}", session.session_id))
+    /// Spawns the long-running decoupled decoder and presentation threads.
+    pub fn start_background_workers(self: &Arc<Self>) {
+        self.spawn_decoder_worker();
+        self.spawn_emitter_worker();
+    }
+
+    /// Background thread: continuously decodes frames ahead of the playhead,
+    /// populating the lookahead ring buffer up to capacity.
+    fn spawn_decoder_worker(self: &Arc<Self>) {
+        let decoder_arc = Arc::clone(&self.decoder);
+        let buffer_arc = Arc::clone(&self.lookahead_buffer);
+        let clock_arc = Arc::clone(&self.master_clock);
+        let shutdown = Arc::clone(&self.worker_shutdown);
+        let session_id = self.session_id.clone();
+
+        let _ = thread::Builder::new()
+            .name(format!("aether-dec-{}", session_id))
             .spawn(move || {
-                loop {
-                    match stop_rx.recv_timeout(frame_interval) {
-                        Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                            break;
-                        }
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                while !shutdown.load(Ordering::SeqCst) {
+                    let epoch = buffer_arc.current_epoch();
+
+                    // If buffer is full or EOS reached for this epoch, sleep briefly
+                    if buffer_arc.is_full() || buffer_arc.is_eos() {
+                        thread::sleep(Duration::from_millis(4));
+                        continue;
                     }
 
-                    if !session.is_playing.load(Ordering::SeqCst) {
-                        break;
+                    // Try acquiring decoder lock without blocking any in-flight seeks
+                    let mut dec_guard = match decoder_arc.try_lock() {
+                        Ok(g) => g,
+                        Err(std::sync::TryLockError::WouldBlock) => {
+                            thread::sleep(Duration::from_millis(2));
+                            continue;
+                        }
+                        Err(std::sync::TryLockError::Poisoned(_)) => break,
+                    };
+
+                    // Check if seek epoch changed while acquiring lock
+                    if buffer_arc.current_epoch() != epoch {
+                        continue;
                     }
 
-                    match session.tick_playback() {
-                        Ok(PlaybackTickStatus::FrameDecoded) => {
-                            // Frame was decoded and broadcasted in tick_playback
+                    if dec_guard.video().is_some() {
+                        let decode_res = dec_guard.next_video_frame();
+                        // Also decode audio chunk to advance master audio clock if present
+                        if dec_guard.audio().is_some() {
+                            if let Ok(Some(ab)) = dec_guard.next_audio_buffer() {
+                                clock_arc.update_audio_pts(ab.pts);
+                            }
                         }
-                        Ok(PlaybackTickStatus::AudioBufferDecoded) => {
-                            // Audio tick dispatched state update
+                        // Drop lock immediately before RGBA conversion and buffer wait!
+                        drop(dec_guard);
+
+                        match decode_res {
+                            Ok(Some(mut vf)) => {
+                                vf.ensure_rgba8();
+                                let _ = buffer_arc.push_wait(
+                                    vf,
+                                    epoch,
+                                    Some(Duration::from_millis(50)),
+                                );
+                            }
+                            Ok(None) => {
+                                buffer_arc.set_eos(epoch, true);
+                            }
+                            Err(_) => {
+                                buffer_arc.set_eos(epoch, true);
+                            }
                         }
-                        Ok(PlaybackTickStatus::EndOfStream) => {
-                            session.current_pts.store(session.duration_pts, Ordering::SeqCst);
-                            session.is_playing.store(false, Ordering::SeqCst);
-                            session.broadcast_state();
-                            break;
+                    } else if dec_guard.audio().is_some() {
+                        let audio_res = dec_guard.next_audio_buffer();
+                        drop(dec_guard);
+
+                        match audio_res {
+                            Ok(Some(ab)) => {
+                                clock_arc.update_audio_pts(ab.pts);
+                                thread::sleep(Duration::from_millis(10));
+                            }
+                            Ok(None) => {
+                                buffer_arc.set_eos(epoch, true);
+                            }
+                            Err(_) => {
+                                buffer_arc.set_eos(epoch, true);
+                            }
                         }
-                        Err(_) => {
-                            session.is_playing.store(false, Ordering::SeqCst);
-                            session.broadcast_state();
-                            break;
+                    } else {
+                        drop(dec_guard);
+                        buffer_arc.set_eos(epoch, true);
+                    }
+                }
+            });
+    }
+
+    /// Background thread: continuously consumes frames from the lookahead ring buffer,
+    /// synchronized against the master clock, executing frame dropping on late frames.
+    fn spawn_emitter_worker(self: &Arc<Self>) {
+        let session_weak = Arc::downgrade(self);
+        let buffer_arc = Arc::clone(&self.lookahead_buffer);
+        let clock_arc = Arc::clone(&self.master_clock);
+        let is_playing = Arc::clone(&self.is_playing);
+        let current_pts = Arc::clone(&self.current_pts);
+        let shutdown = Arc::clone(&self.worker_shutdown);
+        let session_id = self.session_id.clone();
+        let duration_pts = self.duration_pts;
+        let fps = if self.fps > 0.0 { self.fps } else { 60.0 };
+
+        let _ = thread::Builder::new()
+            .name(format!("aether-emit-{}", session_id))
+            .spawn(move || {
+                while !shutdown.load(Ordering::SeqCst) {
+                    if !is_playing.load(Ordering::SeqCst) {
+                        thread::sleep(Duration::from_millis(4));
+                        continue;
+                    }
+
+                    let session = match session_weak.upgrade() {
+                        Some(s) => s,
+                        None => break,
+                    };
+
+                    let master_pts = clock_arc.current_pts();
+
+                    // Check for reaching or exceeding EOS
+                    if master_pts >= duration_pts {
+                        current_pts.store(duration_pts, Ordering::SeqCst);
+                        is_playing.store(false, Ordering::SeqCst);
+                        clock_arc.pause();
+                        session.broadcast_state();
+                        continue;
+                    }
+
+                    if session.media_type == MediaType::Audio {
+                        current_pts.store(master_pts, Ordering::SeqCst);
+                        session.broadcast_state();
+                        thread::sleep(Duration::from_millis(15));
+                        continue;
+                    }
+
+                    match buffer_arc.peek_pts_and_duration() {
+                        Some((frame_pts, frame_dur)) => {
+                            match FrameDropper::evaluate(frame_pts, frame_dur, master_pts) {
+                                FrameAction::Drop => {
+                                    // Late frame: drop immediately to prevent cumulative A/V drift!
+                                    buffer_arc.drop_front();
+                                    continue;
+                                }
+                                FrameAction::Present => {
+                                    if let Some(vf) = buffer_arc.pop_front() {
+                                        current_pts.store(vf.pts, Ordering::SeqCst);
+                                        let timestamp_seconds = vf.timestamp_seconds();
+                                        let bf = BridgeFrame {
+                                            width: vf.width,
+                                            height: vf.height,
+                                            pts: vf.pts,
+                                            duration_pts: vf.duration_pts,
+                                            rgba_bytes: vf.data,
+                                            row_stride_bytes: vf.row_stride_bytes,
+                                            timestamp_seconds,
+                                        };
+                                        if let Ok(mut last) = session.last_frame.lock() {
+                                            *last = Some(bf.clone());
+                                        }
+                                        session.broadcast_frame(&bf);
+                                        session.broadcast_state();
+                                    }
+                                    thread::sleep(Duration::from_millis(4));
+                                }
+                                FrameAction::Wait { pts_ahead } => {
+                                    let sleep_secs = (pts_ahead as f64 / fps).clamp(0.001, 0.016);
+                                    thread::sleep(Duration::from_secs_f64(sleep_secs));
+                                }
+                            }
+                        }
+                        None => {
+                            if buffer_arc.is_eos() {
+                                current_pts.store(duration_pts, Ordering::SeqCst);
+                                is_playing.store(false, Ordering::SeqCst);
+                                clock_arc.pause();
+                                session.broadcast_state();
+                            } else {
+                                // Buffer underrun: yield briefly for decoder thread
+                                thread::sleep(Duration::from_millis(2));
+                            }
                         }
                     }
                 }
-            })
-            .map_err(|e| format!("Failed to spawn playback thread: {}", e))?;
-
-        Ok(())
+            });
     }
 
-    /// Pauses sequential playback.
-    pub fn pause(&self) -> Result<(), String> {
-        self.is_playing.store(false, Ordering::SeqCst);
-        self.stop_ticker();
-        // Wait for any in-flight tick_playback() holding the decoder lock to finish
-        // before returning from pause(), preventing post-pause PTS drift.
-        let _sync = self.decoder.lock();
-        self.broadcast_state();
-        Ok(())
-    }
-
-    /// Stops the ticker background thread.
-    fn stop_ticker(&self) {
-        if let Ok(mut tx_slot) = self.ticker_stop_tx.lock() {
-            if let Some(tx) = tx_slot.take() {
-                let _ = tx.send(());
-            }
-        }
-    }
-
-    /// Advances the decoder by one frame/buffer during playback loop.
+    /// Single-step advance method for backward compatibility and manual stepping.
     pub fn tick_playback(&self) -> Result<PlaybackTickStatus, String> {
         let mut dec = self.decoder.lock().map_err(|e| e.to_string())?;
 
@@ -256,45 +400,90 @@ impl PlaybackSession {
     }
 
     /// Seeks the session to a specific presentation timestamp (PTS).
-    /// Clamps out-of-bounds PTS to [0, duration_pts].
-    /// Decodes and returns the frame at that position immediately for responsive scrubbing.
+    ///
+    /// Instantly flushes the lookahead ring buffer, performs $O(\log K)$ keyframe lookup
+    /// using `FrameIndex`, decodes the target frame immediately for zero-latency UI response,
+    /// and pre-fills the lookahead buffer forward from the new seek point.
     pub fn seek_pts(&self, target_pts: i64) -> Result<Option<BridgeFrame>, String> {
         let clamped_pts = target_pts.clamp(0, self.duration_pts);
+        let new_epoch = self.current_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+
+        // 1. Immediately flush lookahead buffer
+        self.lookahead_buffer.flush_and_set_epoch(new_epoch);
+
+        // 2. Set current PTS and update master clock
+        if clamped_pts == 0 {
+            self.current_pts.store(0, Ordering::SeqCst);
+        } else if clamped_pts == self.duration_pts {
+            self.current_pts.store(self.duration_pts, Ordering::SeqCst);
+        } else {
+            self.current_pts.store(clamped_pts, Ordering::SeqCst);
+        }
+        self.master_clock.seek(clamped_pts);
+
+        // 3. Acquire decoder lock
         let mut dec = self.decoder.lock().map_err(|e| e.to_string())?;
 
-        dec.seek_pts(clamped_pts)
-            .map_err(|e| format!("Decoder seek failed to PTS {}: {}", clamped_pts, e))?;
+        // 4. Seek to preceding keyframe in FrameIndex when available
+        let seek_point = if let Some(ref fidx) = self.frame_index {
+            if let Some(kf) = fidx.find_keyframe_at_or_before(clamped_pts) {
+                kf.pts
+            } else {
+                clamped_pts
+            }
+        } else {
+            clamped_pts
+        };
 
-        self.current_pts.store(clamped_pts, Ordering::SeqCst);
+        dec.seek_pts(seek_point)
+            .map_err(|e| format!("Decoder seek failed to PTS {}: {}", seek_point, e))?;
 
         let frame = if dec.video().is_some() {
-            match dec.next_video_frame() {
-                Ok(Some(mut vf)) => {
-                    vf.ensure_rgba8();
-                    self.current_pts.store(vf.pts, Ordering::SeqCst);
-                    let timestamp_seconds = vf.timestamp_seconds();
-                    let bf = BridgeFrame {
-                        width: vf.width,
-                        height: vf.height,
-                        pts: vf.pts,
-                        duration_pts: vf.duration_pts,
-                        rgba_bytes: vf.data,
-                        row_stride_bytes: vf.row_stride_bytes,
-                        timestamp_seconds,
-                    };
-                    if let Ok(mut last) = self.last_frame.lock() {
-                        *last = Some(bf.clone());
-                    }
-                    self.broadcast_frame(&bf);
-                    Some(bf)
+            let mut target_frame = None;
+            while let Ok(Some(mut vf)) = dec.next_video_frame() {
+                let pts = vf.pts;
+                vf.ensure_rgba8();
+                target_frame = Some(vf);
+                if pts >= clamped_pts {
+                    break;
                 }
-                Ok(None) => None,
-                Err(_) => None,
+            }
+
+            if target_frame.is_none() && seek_point != clamped_pts {
+                let _ = dec.seek_pts(clamped_pts);
+                if let Ok(Some(mut vf)) = dec.next_video_frame() {
+                    vf.ensure_rgba8();
+                    target_frame = Some(vf);
+                }
+            }
+
+            if let Some(vf) = target_frame {
+                if clamped_pts > 0 && clamped_pts < self.duration_pts {
+                    self.current_pts.store(vf.pts, Ordering::SeqCst);
+                }
+                let timestamp_seconds = vf.timestamp_seconds();
+                let bf = BridgeFrame {
+                    width: vf.width,
+                    height: vf.height,
+                    pts: vf.pts,
+                    duration_pts: vf.duration_pts,
+                    rgba_bytes: vf.data,
+                    row_stride_bytes: vf.row_stride_bytes,
+                    timestamp_seconds,
+                };
+                if let Ok(mut last) = self.last_frame.lock() {
+                    *last = Some(bf.clone());
+                }
+                self.broadcast_frame(&bf);
+                Some(bf)
+            } else {
+                None
             }
         } else {
             None
         };
 
+        drop(dec);
         self.broadcast_state();
         Ok(frame)
     }
@@ -316,12 +505,18 @@ impl PlaybackSession {
         };
         self.seek_pts(target_pts)
     }
+
+    /// Terminates background threads and frees resources.
+    pub fn close(&self) {
+        self.is_playing.store(false, Ordering::SeqCst);
+        self.worker_shutdown.store(true, Ordering::SeqCst);
+        self.lookahead_buffer.close();
+    }
 }
 
 impl Drop for PlaybackSession {
     fn drop(&mut self) {
-        self.is_playing.store(false, Ordering::SeqCst);
-        self.stop_ticker();
+        self.close();
     }
 }
 
@@ -430,6 +625,19 @@ impl SessionRegistry {
             }
         }
 
+        // Load or build GOP FrameIndex for video files
+        let frame_index = if !file_path.starts_with("synthetic://") {
+            let path = Path::new(file_path);
+            aether_media::build_or_load_frame_index_with_timebase(path, timebase, None)
+                .ok()
+                .map(Arc::new)
+        } else {
+            None
+        };
+
+        let lookahead_buffer = Arc::new(LookaheadRingBuffer::new(DEFAULT_LOOKAHEAD_CAPACITY));
+        let master_clock = Arc::new(MasterClock::new(timebase));
+
         let session = Arc::new(PlaybackSession {
             session_id: session_id.clone(),
             texture_id,
@@ -443,12 +651,18 @@ impl SessionRegistry {
             media_type,
             is_playing: Arc::new(AtomicBool::new(false)),
             current_pts: Arc::new(AtomicI64::new(0)),
-            decoder: Mutex::new(decoder),
+            lookahead_buffer,
+            master_clock,
+            frame_index,
+            current_epoch: AtomicU64::new(0),
+            worker_shutdown: Arc::new(AtomicBool::new(false)),
+            decoder: Arc::new(Mutex::new(decoder)),
             frame_sinks: Mutex::new(Vec::new()),
             state_sinks: Mutex::new(Vec::new()),
-            ticker_stop_tx: Mutex::new(None),
             last_frame: Mutex::new(initial_frame),
         });
+
+        session.start_background_workers();
 
         let info = session.info();
 
@@ -462,7 +676,7 @@ impl SessionRegistry {
     pub fn close_session(&self, session_id: &str) -> Result<(), String> {
         let mut map = self.sessions.write().map_err(|e| e.to_string())?;
         if let Some(session) = map.remove(session_id) {
-            session.pause()?;
+            session.close();
             Ok(())
         } else {
             Err(format!("Session with ID '{}' not found", session_id))
@@ -541,7 +755,7 @@ impl SessionRegistry {
     pub fn clear_all(&self) {
         if let Ok(mut map) = self.sessions.write() {
             for (_, session) in map.drain() {
-                let _ = session.pause();
+                session.close();
             }
         }
     }

@@ -154,11 +154,11 @@ mod tests {
         let ingested =
             ingest_media_with_cache(&fixture, tb, Some(&cache_mgr)).expect("ingest failed");
 
-        let fidx_path = ingested
+        let index_path = ingested
             .frame_index_path
             .as_ref()
-            .expect("expected persisted .fidx path");
-        assert!(fidx_path.exists(), "expected .fidx file to exist on disk");
+            .expect("expected persisted index path");
+        assert!(index_path.exists(), "expected index file to exist on disk");
 
         let idx = ingested.frame_index.as_ref().expect("expected FrameIndex");
         assert_eq!(idx.len(), 10);

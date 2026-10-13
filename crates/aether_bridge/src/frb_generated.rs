@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.3.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 416237322;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -369050;
 
 // Section: executor
 
@@ -444,11 +444,13 @@ fn wire__crate__api__get_audio_waveform_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_asset_id = <String>::sse_decode(&mut deserializer);
+            let api_channel = <u32>::sse_decode(&mut deserializer);
             let api_lod = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::get_audio_waveform(api_asset_id, api_lod)?;
+                    let output_ok =
+                        crate::api::get_audio_waveform(api_asset_id, api_channel, api_lod)?;
                     Ok(output_ok)
                 })())
             }
@@ -548,6 +550,40 @@ fn wire__crate__api__get_preview_state_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::get_preview_state(api_session_id)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__get_timeline_thumbnail_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_timeline_thumbnail",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_asset_id = <String>::sse_decode(&mut deserializer);
+            let api_pts = <i64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::get_timeline_thumbnail(api_asset_id, api_pts)?;
                     Ok(output_ok)
                 })())
             }
@@ -921,6 +957,45 @@ fn wire__crate__api__save_project_impl(
         },
     )
 }
+fn wire__crate__api__start_media_analysis_stream_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "start_media_analysis_stream",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_sink = <StreamSink<
+                crate::api::MediaAnalysisProgress,
+                flutter_rust_bridge::for_generated::SseCodec,
+            >>::sse_decode(&mut deserializer);
+            let api_asset_id = <String>::sse_decode(&mut deserializer);
+            let api_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::start_media_analysis_stream(api_sink, api_asset_id, api_path)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__subscribe_import_progress_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1148,6 +1223,16 @@ impl SseDecode
 }
 
 impl SseDecode
+    for StreamSink<crate::api::MediaAnalysisProgress, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
+
+impl SseDecode
     for StreamSink<crate::api::PlaybackState, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -1173,13 +1258,13 @@ impl SseDecode for uuid::Uuid {
     }
 }
 
-impl SseDecode for crate::api::AudioPeak {
+impl SseDecode for crate::api::AudioPeakData {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_min = <f32>::sse_decode(deserializer);
         let mut var_max = <f32>::sse_decode(deserializer);
         let mut var_rms = <f32>::sse_decode(deserializer);
-        return crate::api::AudioPeak {
+        return crate::api::AudioPeakData {
             min: var_min,
             max: var_max,
             rms: var_rms,
@@ -1314,13 +1399,13 @@ impl SseDecode for Vec<i64> {
     }
 }
 
-impl SseDecode for Vec<crate::api::AudioPeak> {
+impl SseDecode for Vec<crate::api::AudioPeakData> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = vec![];
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::AudioPeak>::sse_decode(deserializer));
+            ans_.push(<crate::api::AudioPeakData>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -1371,6 +1456,20 @@ impl SseDecode for Vec<crate::api::Track> {
             ans_.push(<crate::api::Track>::sse_decode(deserializer));
         }
         return ans_;
+    }
+}
+
+impl SseDecode for crate::api::MediaAnalysisProgress {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_assetId = <String>::sse_decode(deserializer);
+        let mut var_step = <String>::sse_decode(deserializer);
+        let mut var_progress = <f32>::sse_decode(deserializer);
+        return crate::api::MediaAnalysisProgress {
+            asset_id: var_assetId,
+            step: var_step,
+            progress: var_progress,
+        };
     }
 }
 
@@ -1615,6 +1714,17 @@ impl SseDecode for Option<Vec<i64>> {
     }
 }
 
+impl SseDecode for Option<Vec<u8>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<Vec<u8>>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for crate::api::PlaybackState {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1790,20 +1900,22 @@ fn pde_ffi_dispatcher_primary_impl(
         12 => wire__crate__api__get_media_items_impl(port, ptr, rust_vec_len, data_len),
         13 => wire__crate__api__get_media_pool_impl(port, ptr, rust_vec_len, data_len),
         14 => wire__crate__api__get_preview_state_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__import_media_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__import_media_asset_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__import_media_file_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__init_engine_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__inspect_media_file_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__load_project_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__preview_pause_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__preview_play_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__preview_seek_pts_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__preview_seek_seconds_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__save_project_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__subscribe_import_progress_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__subscribe_playback_state_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__subscribe_preview_frames_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__get_timeline_thumbnail_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__import_media_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__import_media_asset_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__import_media_file_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__init_engine_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__inspect_media_file_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__load_project_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__preview_pause_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__preview_play_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__preview_seek_pts_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__preview_seek_seconds_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__save_project_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__start_media_analysis_stream_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__subscribe_import_progress_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__subscribe_playback_state_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__subscribe_preview_frames_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1823,7 +1935,7 @@ fn pde_ffi_dispatcher_sync_impl(
 // Section: rust2dart
 
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::AudioPeak {
+impl flutter_rust_bridge::IntoDart for crate::api::AudioPeakData {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.min.into_into_dart().into_dart(),
@@ -1833,9 +1945,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::AudioPeak {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::AudioPeak {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::AudioPeak> for crate::api::AudioPeak {
-    fn into_into_dart(self) -> crate::api::AudioPeak {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::AudioPeakData {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::AudioPeakData> for crate::api::AudioPeakData {
+    fn into_into_dart(self) -> crate::api::AudioPeakData {
         self
     }
 }
@@ -1918,6 +2030,28 @@ impl flutter_rust_bridge::IntoDart for crate::api::ImportStage {
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::ImportStage {}
 impl flutter_rust_bridge::IntoIntoDart<crate::api::ImportStage> for crate::api::ImportStage {
     fn into_into_dart(self) -> crate::api::ImportStage {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::MediaAnalysisProgress {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.asset_id.into_into_dart().into_dart(),
+            self.step.into_into_dart().into_dart(),
+            self.progress.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::MediaAnalysisProgress
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::MediaAnalysisProgress>
+    for crate::api::MediaAnalysisProgress
+{
+    fn into_into_dart(self) -> crate::api::MediaAnalysisProgress {
         self
     }
 }
@@ -2251,6 +2385,15 @@ impl SseEncode
 }
 
 impl SseEncode
+    for StreamSink<crate::api::MediaAnalysisProgress, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
+impl SseEncode
     for StreamSink<crate::api::PlaybackState, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -2273,7 +2416,7 @@ impl SseEncode for uuid::Uuid {
     }
 }
 
-impl SseEncode for crate::api::AudioPeak {
+impl SseEncode for crate::api::AudioPeakData {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <f32>::sse_encode(self.min, serializer);
@@ -2385,12 +2528,12 @@ impl SseEncode for Vec<i64> {
     }
 }
 
-impl SseEncode for Vec<crate::api::AudioPeak> {
+impl SseEncode for Vec<crate::api::AudioPeakData> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::AudioPeak>::sse_encode(item, serializer);
+            <crate::api::AudioPeakData>::sse_encode(item, serializer);
         }
     }
 }
@@ -2432,6 +2575,15 @@ impl SseEncode for Vec<crate::api::Track> {
         for item in self {
             <crate::api::Track>::sse_encode(item, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::MediaAnalysisProgress {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.asset_id, serializer);
+        <String>::sse_encode(self.step, serializer);
+        <f32>::sse_encode(self.progress, serializer);
     }
 }
 
@@ -2618,6 +2770,16 @@ impl SseEncode for Option<Vec<i64>> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <Vec<i64>>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<Vec<u8>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <Vec<u8>>::sse_encode(value, serializer);
         }
     }
 }

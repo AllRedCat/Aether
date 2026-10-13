@@ -135,9 +135,25 @@ impl CacheManager {
         &self.root
     }
 
-    /// Deterministic path for a binary frame index file (`.fidx`) given a `cache_key`.
+    /// Deterministic path for a binary frame index file (`.index`) given a `cache_key`.
+    ///
+    /// If an existing `.index` file exists, returns that path. If a legacy `.fidx`
+    /// file exists and no `.index` is present, returns the legacy path for backwards
+    /// compatibility; otherwise defaults to the primary `.index` path.
     pub fn frame_index_path(&self, cache_key: &str) -> PathBuf {
-        self.root.join("index").join(format!("{}.fidx", cache_key))
+        let index_path = self.root.join("index").join(format!("{}.index", cache_key));
+        if !index_path.exists() {
+            let legacy_fidx = self.root.join("index").join(format!("{}.fidx", cache_key));
+            if legacy_fidx.exists() {
+                return legacy_fidx;
+            }
+        }
+        index_path
+    }
+
+    /// Primary `.index` path for writing new binary frame index cache files.
+    pub fn primary_frame_index_path(&self, cache_key: &str) -> PathBuf {
+        self.root.join("index").join(format!("{}.index", cache_key))
     }
 
     /// Deterministic path for an audio waveform peak file (`.peak`) given a `cache_key`.
@@ -377,7 +393,10 @@ mod tests {
         let (fp_b, idx_path_b) = mgr.resolve_frame_index_for_source(&media_path).unwrap();
         assert_eq!(fp_a, fp_b);
         assert_eq!(idx_path_a, idx_path_b);
-        assert!(idx_path_a.ends_with(format!("cache/index/{}.fidx", fp_a.cache_key)));
+        assert!(
+            idx_path_a.ends_with(format!("cache/index/{}.index", fp_a.cache_key))
+                || idx_path_a.ends_with(format!("cache/index/{}.fidx", fp_a.cache_key))
+        );
     }
 }
 

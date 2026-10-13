@@ -17,6 +17,7 @@ class MediaPoolState {
   final bool isLoading;
   final String? errorMessage;
   final Map<String, ImportProgress> indexingProgress;
+  final Map<String, MediaAnalysisProgress> analysisProgress;
 
   const MediaPoolState({
     this.items = const [],
@@ -24,6 +25,7 @@ class MediaPoolState {
     this.isLoading = false,
     this.errorMessage,
     this.indexingProgress = const {},
+    this.analysisProgress = const {},
   });
 
   const MediaPoolState.initial()
@@ -31,7 +33,8 @@ class MediaPoolState {
         selectedItemId = null,
         isLoading = false,
         errorMessage = null,
-        indexingProgress = const {};
+        indexingProgress = const {},
+        analysisProgress = const {};
 
   MediaItem? get selectedItem {
     if (selectedItemId == null) return null;
@@ -42,18 +45,33 @@ class MediaPoolState {
     }
   }
 
-  /// Returns `true` when one or more imported assets are actively being indexed
-  /// or having their `.peak` / `.atlas` caches generated in the background.
+  /// Returns `true` when one or more imported assets are actively being indexed,
+  /// analyzed, or having their `.peak` / `.atlas` caches generated in the background.
   bool get isIndexing =>
+      analysisProgress.values.any((p) => !(p.step == 'thumbnails' && p.progress >= 1.0)) ||
       indexingProgress.values.any((progress) => !progress.isDone);
 
   /// List of currently active (non-completed) background indexing tasks.
   List<ImportProgress> get activeIndexingTasks =>
       indexingProgress.values.where((progress) => !progress.isDone).toList();
 
-  /// Aggregate `[0.0, 1.0]` progress across all active background indexing tasks,
-  /// or `null` when no indexing tasks are active.
+  /// Aggregate `[0.0, 1.0]` progress across all active background indexing and analysis tasks,
+  /// or `null` when no tasks are active.
   double? get overallIndexingProgress {
+    final activeAnalysis = analysisProgress.values
+        .where((p) => !(p.step == 'thumbnails' && p.progress >= 1.0))
+        .toList();
+    if (activeAnalysis.isNotEmpty) {
+      final sum = activeAnalysis.fold<double>(0.0, (acc, p) {
+        double stepBase = 0.0;
+        if (p.step == 'audio_peaks') stepBase = 0.33;
+        if (p.step == 'thumbnails') stepBase = 0.66;
+        final total = (stepBase + (p.progress * 0.33)).clamp(0.0, 1.0);
+        return acc + total;
+      });
+      return (sum / activeAnalysis.length).clamp(0.0, 1.0);
+    }
+
     final active = activeIndexingTasks;
     if (active.isEmpty) return null;
     final sum = active.fold<double>(
@@ -66,6 +84,23 @@ class MediaPoolState {
   /// Looks up the latest indexing progress for a given media item UUID.
   ImportProgress? progressForItem(UuidValue id) => indexingProgress[id.uuid];
 
+  /// Looks up the latest analysis progress for a given media item UUID.
+  MediaAnalysisProgress? analysisProgressForItem(UuidValue id) =>
+      analysisProgress[id.uuid];
+
+  /// Returns whether a media item is currently being analyzed or indexed.
+  bool isItemIndexing(UuidValue id) {
+    final ap = analysisProgress[id.uuid];
+    if (ap != null && !(ap.step == 'thumbnails' && ap.progress >= 1.0)) {
+      return true;
+    }
+    final ip = indexingProgress[id.uuid];
+    if (ip != null && !ip.isDone) {
+      return true;
+    }
+    return false;
+  }
+
   MediaPoolState copyWith({
     List<MediaItem>? items,
     UuidValue? selectedItemId,
@@ -74,6 +109,7 @@ class MediaPoolState {
     String? errorMessage,
     bool clearError = false,
     Map<String, ImportProgress>? indexingProgress,
+    Map<String, MediaAnalysisProgress>? analysisProgress,
   }) {
     return MediaPoolState(
       items: items ?? this.items,
@@ -82,6 +118,7 @@ class MediaPoolState {
       isLoading: isLoading ?? this.isLoading,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       indexingProgress: indexingProgress ?? this.indexingProgress,
+      analysisProgress: analysisProgress ?? this.analysisProgress,
     );
   }
 }
@@ -97,6 +134,11 @@ typedef GetMediaItemsFn = Future<List<MediaItem>> Function({
 
 typedef SubscribeImportProgressFn = Stream<ImportProgress> Function();
 
+typedef StartMediaAnalysisStreamFn = Stream<MediaAnalysisProgress> Function({
+  required String assetId,
+  required String path,
+});
+
 /// StateNotifier responsible for managing media pool assets, importing files,
 /// tracking non-blocking background indexing progress, and coordinating clip
 /// insertions onto the timeline.
@@ -105,15 +147,20 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
   final ImportMediaFn? _importMediaFn;
   final GetMediaItemsFn? _getMediaItemsFn;
   final SubscribeImportProgressFn? _subscribeProgressFn;
+  final StartMediaAnalysisStreamFn? _startAnalysisStreamFn;
   final void Function(MediaItem item)? _onAddToTimeline;
   final String? projectPath;
   StreamSubscription<ImportProgress>? _progressSubscription;
+  final Map<String, StreamSubscription<MediaAnalysisProgress>>
+      _analysisSubscriptions = {};
+  final Map<String, DateTime> _lastProgressUpdate = {};
 
   MediaPoolNotifier({
     FilePickerService? filePickerService,
     ImportMediaFn? importMediaFn,
     GetMediaItemsFn? getMediaItemsFn,
     SubscribeImportProgressFn? subscribeProgressFn,
+    StartMediaAnalysisStreamFn? startAnalysisStreamFn,
     void Function(MediaItem item)? onAddToTimeline,
     this.projectPath,
     bool autoLoad = false,
@@ -123,6 +170,7 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
         _importMediaFn = importMediaFn,
         _getMediaItemsFn = getMediaItemsFn,
         _subscribeProgressFn = subscribeProgressFn,
+        _startAnalysisStreamFn = startAnalysisStreamFn,
         _onAddToTimeline = onAddToTimeline,
         super(initialItems != null
             ? MediaPoolState(items: initialItems)
@@ -151,9 +199,82 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
     }
   }
 
-  /// Updates the non-blocking indexing progress state for an asset.
+  /// Starts non-blocking analysis and caching (.index, .peak, .atlas) for an asset.
+  void startMediaAnalysis({required String assetId, required String filePath}) {
+    final analysisFn = _startAnalysisStreamFn;
+    if (analysisFn == null) return;
+
+    _analysisSubscriptions[assetId]?.cancel();
+    try {
+      final stream = analysisFn(assetId: assetId, path: filePath);
+      _analysisSubscriptions[assetId] = stream.listen(
+        (progress) => updateAnalysisProgress(progress),
+        onError: (Object err) {
+          debugPrint(
+              '[MediaPool] Error in media analysis stream for $assetId: $err');
+        },
+        onDone: () {
+          _analysisSubscriptions.remove(assetId);
+        },
+      );
+    } catch (_) {
+      // Safe fallback when running without FFI dylib
+    }
+  }
+
+  /// Updates analysis progress with throttling to prevent excessive UI rebuilds.
+  void updateAnalysisProgress(MediaAnalysisProgress progress) {
+    if (!mounted) return;
+
+    final now = DateTime.now();
+    final key = 'ana_${progress.assetId}';
+    final lastTime = _lastProgressUpdate[key];
+    final previous = state.analysisProgress[progress.assetId];
+    final stepChanged = previous == null || previous.step != progress.step;
+    final isDone = progress.step == 'thumbnails' && progress.progress >= 1.0;
+    final delta = previous != null
+        ? (progress.progress - previous.progress).abs()
+        : 1.0;
+
+    // Only skip updates if it's within the same step, not done, change < 2%, and within 50ms window
+    if (!stepChanged &&
+        !isDone &&
+        delta < 0.02 &&
+        lastTime != null &&
+        now.difference(lastTime).inMilliseconds < 50) {
+      return;
+    }
+    _lastProgressUpdate[key] = now;
+
+    final updated =
+        Map<String, MediaAnalysisProgress>.from(state.analysisProgress);
+    updated[progress.assetId] = progress;
+    state = state.copyWith(analysisProgress: updated);
+  }
+
+  /// Updates the non-blocking indexing progress state for an asset with throttling.
   void updateIndexingProgress(ImportProgress progress) {
     if (!mounted) return;
+
+    final now = DateTime.now();
+    final key = 'idx_${progress.assetId}';
+    final lastTime = _lastProgressUpdate[key];
+    final previous = state.indexingProgress[progress.assetId];
+    final stageChanged = previous == null || previous.stage != progress.stage;
+    final isDone = progress.isDone;
+    final delta = previous != null
+        ? (progress.progress - previous.progress).abs()
+        : 1.0;
+
+    if (!stageChanged &&
+        !isDone &&
+        delta < 0.02 &&
+        lastTime != null &&
+        now.difference(lastTime).inMilliseconds < 50) {
+      return;
+    }
+    _lastProgressUpdate[key] = now;
+
     final updated = Map<String, ImportProgress>.from(state.indexingProgress);
     updated[progress.assetId] = progress;
     state = state.copyWith(indexingProgress: updated);
@@ -218,6 +339,10 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
           filePath: path,
         );
         updatedItems.add(mediaItem);
+        startMediaAnalysis(
+          assetId: mediaItem.id.uuid,
+          filePath: mediaItem.filePath,
+        );
       } catch (e) {
         errors.add('$path: $e');
       }
@@ -241,14 +366,23 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
   }
 
   void removeItem(UuidValue id) {
+    _analysisSubscriptions[id.uuid]?.cancel();
+    _analysisSubscriptions.remove(id.uuid);
+    _lastProgressUpdate.remove('ana_${id.uuid}');
+    _lastProgressUpdate.remove('idx_${id.uuid}');
+
     final updated = state.items.where((i) => i.id != id).toList();
     final updatedProgress =
         Map<String, ImportProgress>.from(state.indexingProgress)
+          ..remove(id.uuid);
+    final updatedAnalysis =
+        Map<String, MediaAnalysisProgress>.from(state.analysisProgress)
           ..remove(id.uuid);
     state = state.copyWith(
       items: updated,
       clearSelection: state.selectedItemId == id,
       indexingProgress: updatedProgress,
+      analysisProgress: updatedAnalysis,
     );
   }
 
@@ -262,6 +396,10 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
   @override
   void dispose() {
     _progressSubscription?.cancel();
+    for (final sub in _analysisSubscriptions.values) {
+      sub.cancel();
+    }
+    _analysisSubscriptions.clear();
     super.dispose();
   }
 }
@@ -277,6 +415,7 @@ final mediaPoolProvider =
     importMediaFn: importMediaFile,
     getMediaItemsFn: getMediaItems,
     subscribeProgressFn: subscribeImportProgress,
+    startAnalysisStreamFn: startMediaAnalysisStream,
     // Rust's Project::load expects the .aether FILE path, not the folder.
     projectPath: project?.filePath,
     initialItems: project?.mediaPool.items,

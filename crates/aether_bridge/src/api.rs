@@ -19,10 +19,22 @@ pub use crate::frb_generated::StreamSink;
 /// Single audio waveform peak bin (`min`, `max`, `rms` in normalized `[-1.0, 1.0]`)
 /// exposed across the FFI boundary for zero-decode timeline waveform rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct AudioPeak {
+pub struct AudioPeakData {
     pub min: f32,
     pub max: f32,
     pub rms: f32,
+}
+
+pub type AudioPeak = AudioPeakData;
+
+/// Progress event emitted across FFI during media analysis (`"indexing"`, `"audio_peaks"`, `"thumbnails"`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MediaAnalysisProgress {
+    pub asset_id: String,
+    /// Pipeline step: `"indexing"`, `"audio_peaks"`, or `"thumbnails"`.
+    pub step: String,
+    /// Normalized step progress in `[0.0, 1.0]`.
+    pub progress: f32,
 }
 
 /// Complete descriptive, technical, and sidecar cache metadata returned when
@@ -643,11 +655,16 @@ pub fn import_media_file(
 }
 
 /// Reads a single Level-of-Detail (`lod`) slice of audio waveform peaks (`min`, `max`, `rms`)
-/// for `asset_id` directly from the binary `.peak` / `.aether_peaks` sidecar cache on disk,
+/// for `asset_id` and `channel` directly from the binary `.peak` / `.aether_peaks` sidecar cache on disk,
 /// without reading or decoding the original audio file during timeline rendering.
 ///
-/// If the `.peak` sidecar has not yet been written to disk, it is generated once and cached.
-pub fn get_audio_waveform(asset_id: String, lod: u32) -> Result<Vec<AudioPeak>, String> {
+/// If `channel` is within channel bounds, returns peaks for that specific channel;
+/// otherwise returns mono mixdown.
+pub fn get_audio_waveform(
+    asset_id: String,
+    channel: u32,
+    lod: u32,
+) -> Result<Vec<AudioPeakData>, String> {
     let trimmed = asset_id.trim();
     if trimmed.is_empty() {
         return Err("asset_id cannot be empty".to_string());
@@ -734,15 +751,223 @@ pub fn get_audio_waveform(asset_id: String, lod: u32) -> Result<Vec<AudioPeak>, 
 
     let level =
         aether_media::audio_peaks::AudioPeakPyramid::load_lod_from_file(&peak_file_path, lod)?;
-    let mono = level.mixdown_mono();
-    Ok(mono
+    let samples = if (channel as usize) < level.channels.len() {
+        level.channels[channel as usize].clone()
+    } else {
+        level.mixdown_mono()
+    };
+
+    Ok(samples
         .into_iter()
-        .map(|s| AudioPeak {
+        .map(|s| AudioPeakData {
             min: s.min,
             max: s.max,
             rms: s.rms,
         })
         .collect())
+}
+
+/// Reads a single timeline thumbnail image payload (compressed JPEG or WebP bytes)
+/// from the asset's binary `.atlas` sidecar file for presentation timestamp `pts`.
+/// Returns `Ok(Some(bytes))` if the thumbnail is available, or `Ok(None)` if no thumbnails
+/// have been generated or the asset is not an indexed video.
+pub fn get_timeline_thumbnail(asset_id: String, pts: i64) -> Result<Option<Vec<u8>>, String> {
+    let trimmed = asset_id.trim();
+    if trimmed.is_empty() {
+        return Err("asset_id cannot be empty".to_string());
+    }
+
+    let reg_opt = ASSET_REGISTRY
+        .read()
+        .ok()
+        .and_then(|reg| reg.get(trimmed).cloned());
+
+    let atlas_path = if let Some(registered) = reg_opt {
+        registered.thumb_atlas_path
+    } else {
+        let as_path = Path::new(trimmed);
+        if as_path.exists() && as_path.is_file() {
+            let ext = as_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext == "atlas" {
+                as_path.to_path_buf()
+            } else {
+                let cache_mgr = resolve_cache_manager(None);
+                let fp = aether_media::compute_source_fingerprint(as_path)
+                    .map_err(|e| e.to_string())?;
+                cache_mgr.thumbnails_path(&fp.cache_key)
+            }
+        } else {
+            let cache_mgr = resolve_cache_manager(None);
+            cache_mgr.thumbnails_path(trimmed)
+        }
+    };
+
+    if !atlas_path.exists() {
+        return Ok(None);
+    }
+
+    let res = aether_media::thumbnails::ThumbnailFilmstrip::read_thumbnail_at_or_before_from_file(
+        &atlas_path,
+        pts,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(res.map(|(_entry, payload)| payload))
+}
+
+/// Starts an asynchronous media analysis background worker that generates:
+/// 1. Temporal GOP Frame Index (`.index`) — emits step: `"indexing"`
+/// 2. Audio Waveform Pyramid (`.peak`) — emits step: `"audio_peaks"`
+/// 3. Timeline Filmstrip Atlas (`.atlas`) — emits step: `"thumbnails"`
+///
+/// Progress updates from `0.0` to `1.0` are pushed to `sink` without blocking the caller.
+pub fn start_media_analysis_stream(
+    sink: StreamSink<MediaAnalysisProgress>,
+    asset_id: String,
+    path: String,
+) -> Result<(), String> {
+    let trimmed_id = asset_id.trim().to_string();
+    if trimmed_id.is_empty() {
+        return Err("asset_id cannot be empty".to_string());
+    }
+    let trimmed_path = path.trim().to_string();
+    if trimmed_path.is_empty() {
+        return Err("path cannot be empty".to_string());
+    }
+    let p = PathBuf::from(&trimmed_path);
+    if !p.exists() || !p.is_file() {
+        return Err(format!("File does not exist: {}", trimmed_path));
+    }
+
+    let aid = trimmed_id.clone();
+    let file_str = trimmed_path.clone();
+    let thread_name = format!("aether-ana-{}", &aid[..aid.len().min(8)]);
+
+    thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            let cache_mgr = resolve_cache_manager(None);
+            let timebase = aether_media::DEFAULT_TIMEBASE;
+
+            // Step 1: Indexing
+            let _ = sink.add(MediaAnalysisProgress {
+                asset_id: aid.clone(),
+                step: "indexing".to_string(),
+                progress: 0.0,
+            });
+
+            let ingested = match aether_media::ingest_media_with_cache(&p, timebase, Some(&cache_mgr)) {
+                Ok(ing) => {
+                    let _ = sink.add(MediaAnalysisProgress {
+                        asset_id: aid.clone(),
+                        step: "indexing".to_string(),
+                        progress: 1.0,
+                    });
+                    ing
+                }
+                Err(_e) => {
+                    let _ = sink.add(MediaAnalysisProgress {
+                        asset_id: aid.clone(),
+                        step: "indexing".to_string(),
+                        progress: 0.0,
+                    });
+                    return;
+                }
+            };
+
+            let registered = register_media_item_in_cache(
+                &ingested.media_item,
+                &cache_mgr,
+                Some(ingested.fingerprint.cache_key.clone()),
+                ingested.frame_index_path.clone(),
+            );
+
+            let has_audio = registered.media_item.metadata.audio_channels.unwrap_or(0) > 0
+                || matches!(registered.media_item.media_type, MediaType::Audio);
+            let is_video = matches!(registered.media_item.media_type, MediaType::Video);
+
+            // Step 2: Audio Peaks
+            let _ = sink.add(MediaAnalysisProgress {
+                asset_id: aid.clone(),
+                step: "audio_peaks".to_string(),
+                progress: 0.0,
+            });
+
+            if has_audio {
+                if !registered.peak_cache_path.exists() {
+                    let _guard = registered.waveform_lock.lock().ok();
+                    if let Ok(handle) = aether_media::audio_peaks::spawn_waveform_cache_worker(
+                        file_str.clone(),
+                        registered.peak_cache_path.to_string_lossy().to_string(),
+                        aether_media::audio_peaks::DEFAULT_BASE_SAMPLES_PER_PEAK,
+                        aether_media::audio_peaks::DEFAULT_LOD_LEVELS,
+                    ) {
+                        while !handle.is_finished() {
+                            let pm = handle.progress_per_mille().min(1000) as f32 / 1000.0;
+                            let _ = sink.add(MediaAnalysisProgress {
+                                asset_id: aid.clone(),
+                                step: "audio_peaks".to_string(),
+                                progress: pm,
+                            });
+                            thread::sleep(Duration::from_millis(15));
+                        }
+                        let _ = handle.join();
+                    }
+                }
+            }
+            let _ = sink.add(MediaAnalysisProgress {
+                asset_id: aid.clone(),
+                step: "audio_peaks".to_string(),
+                progress: 1.0,
+            });
+
+            // Step 3: Thumbnails
+            let _ = sink.add(MediaAnalysisProgress {
+                asset_id: aid.clone(),
+                step: "thumbnails".to_string(),
+                progress: 0.0,
+            });
+
+            if is_video {
+                if !registered.thumb_atlas_path.exists() {
+                    if let Ok(handle) = aether_media::thumbnails::spawn_thumbnail_filmstrip_worker_with_cache(
+                        file_str.clone(),
+                        Some(registered.thumb_atlas_path.clone()),
+                        160,
+                        90,
+                        aether_media::thumbnails::ThumbnailCodec::Jpeg { quality: 80 },
+                        aether_media::thumbnails::ThumbnailStrategy::Keyframes {
+                            min_interval_pts: 30,
+                        },
+                        timebase,
+                        Some(cache_mgr.clone()),
+                    ) {
+                        while !handle.is_finished() {
+                            let pm = handle.progress_per_mille().min(1000) as f32 / 1000.0;
+                            let _ = sink.add(MediaAnalysisProgress {
+                                asset_id: aid.clone(),
+                                step: "thumbnails".to_string(),
+                                progress: pm,
+                            });
+                            thread::sleep(Duration::from_millis(15));
+                        }
+                        let _ = handle.join();
+                    }
+                }
+            }
+            let _ = sink.add(MediaAnalysisProgress {
+                asset_id: aid.clone(),
+                step: "thumbnails".to_string(),
+                progress: 1.0,
+            });
+        })
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 /// Attaches a `StreamSink<ImportProgress>` to receive asynchronous progress notifications
@@ -1029,7 +1254,7 @@ mod tests {
         let tmp_dir = std::env::temp_dir().join(format!("aether_bridge_test_{}", Uuid::new_v4()));
         std::fs::create_dir_all(&tmp_dir).unwrap();
         let wav_path = tmp_dir.join("tone.wav");
-        // 4096 samples -> 16 bins at LOD 0 (256 spp), 8 bins at LOD 1 (512 spp), 4 bins at LOD 2 (1024 spp)
+        // 4096 samples -> 16 bins at LOD 0 (256 spp), 4 bins at LOD 1 (1024 spp), 1 bin at LOD 2 (4096 spp)
         write_test_wav(&wav_path, 48_000, 4096);
 
         let meta = import_media(wav_path.to_string_lossy().to_string())
@@ -1039,13 +1264,13 @@ mod tests {
         assert!(!meta.cache_key.is_empty());
         assert!(meta.peak_cache_path.is_some());
 
-        let lod0 = get_audio_waveform(meta.id.clone(), 0).expect("get_audio_waveform LOD 0");
-        let lod1 = get_audio_waveform(meta.id.clone(), 1).expect("get_audio_waveform LOD 1");
-        let lod2 = get_audio_waveform(meta.id.clone(), 2).expect("get_audio_waveform LOD 2");
+        let lod0 = get_audio_waveform(meta.id.clone(), 0, 0).expect("get_audio_waveform LOD 0");
+        let lod1 = get_audio_waveform(meta.id.clone(), 0, 1).expect("get_audio_waveform LOD 1");
+        let lod2 = get_audio_waveform(meta.id.clone(), 0, 2).expect("get_audio_waveform LOD 2");
 
         assert_eq!(lod0.len(), 16);
-        assert_eq!(lod1.len(), 8);
-        assert_eq!(lod2.len(), 4);
+        assert_eq!(lod1.len(), 4);
+        assert_eq!(lod2.len(), 1);
 
         for peak in &lod0 {
             assert!(peak.min < -0.5 && peak.min >= -1.0);

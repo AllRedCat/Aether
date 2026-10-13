@@ -36,7 +36,7 @@ use image::{ColorType, ExtendedColorType, ImageEncoder, RgbaImage};
 use serde::{Deserialize, Serialize};
 
 use crate::cache::CacheManager;
-use crate::decoder::{open_video_decoder_with_timebase, VideoFrame};
+use crate::decoder::{open_video_decoder_with_timebase, PixelFormat, VideoFrame};
 use crate::importer::build_or_load_frame_index_with_timebase;
 use crate::{MediaError, DEFAULT_TIMEBASE};
 
@@ -91,10 +91,17 @@ impl ThumbnailCodec {
 /// when building a timeline filmstrip.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ThumbnailStrategy {
-    /// Samples only I-Frames/IDR-Frames from the binary `.fidx` index, enforcing
+    /// Samples only I-Frames/IDR-Frames from the binary `.index` index, enforcing
     /// a minimum `min_interval_pts` gap between consecutive thumbnails.
     /// Falls back to fixed intervals if the asset has no keyframe table.
     Keyframes { min_interval_pts: i64 },
+    /// Prioritizes I-Frames/IDR-Frames with a minimum gap of `min_interval_pts`,
+    /// but if the gap between consecutive keyframes exceeds `max_gap_pts`,
+    /// inserts regular interval frames to maintain visual continuity on the timeline.
+    KeyframesOrInterval {
+        min_interval_pts: i64,
+        max_gap_pts: i64,
+    },
     /// Samples frames at fixed `interval_pts` steps (`0, step, 2*step, ...`).
     FixedIntervalPts { interval_pts: i64 },
     /// Samples frames every `interval_seconds` seconds (`0.0, s, 2*s, ...`).
@@ -165,6 +172,20 @@ impl ThumbnailIndexEntry {
             grid_row: u16::from_le_bytes(b[22..24].try_into().unwrap()),
         }
     }
+}
+
+/// Fixed 48-byte header metadata parsed from a `.atlas` container file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThumbnailFilmstripHeader {
+    pub version: u32,
+    pub codec: ThumbnailCodec,
+    pub thumb_width: u32,
+    pub thumb_height: u32,
+    pub atlas_columns: u16,
+    pub atlas_rows: u16,
+    pub timebase: Rational,
+    pub entry_count: u32,
+    pub payload_section_offset: u64,
 }
 
 /// Indexed timeline filmstrip containing low-resolution thumbnails and an
@@ -357,6 +378,7 @@ impl ThumbnailFilmstrip {
         }
 
         let mut entries = Vec::with_capacity(entry_count);
+        let mut prev_pts = i64::MIN;
         for i in 0..entry_count {
             let start = THUMBNAIL_HEADER_SIZE + i * THUMBNAIL_INDEX_ENTRY_SIZE;
             let raw: [u8; THUMBNAIL_INDEX_ENTRY_SIZE] =
@@ -364,6 +386,13 @@ impl ThumbnailFilmstrip {
                     .try_into()
                     .unwrap();
             let entry = ThumbnailIndexEntry::from_le_bytes(raw);
+            if entry.pts < prev_pts {
+                return Err(MediaError::CorruptFile(format!(
+                    "Thumbnail entries not in non-decreasing PTS order at index {}",
+                    i
+                )));
+            }
+            prev_pts = entry.pts;
             let end = (entry.byte_offset as usize)
                 .checked_add(entry.byte_len as usize)
                 .ok_or_else(|| {
@@ -393,6 +422,95 @@ impl ThumbnailFilmstrip {
             entries,
             payload_blob,
         })
+    }
+
+    /// Reads and parses only the 48-byte header of a `.atlas` container file without loading payloads.
+    pub fn read_header_from_file(path: &Path) -> Result<ThumbnailFilmstripHeader, MediaError> {
+        let mut file = File::open(path).map_err(|e| MediaError::IoError(e.to_string()))?;
+        let mut hdr = [0u8; THUMBNAIL_HEADER_SIZE];
+        file.read_exact(&mut hdr)
+            .map_err(|e| MediaError::CorruptFile(format!("Truncated atlas header: {}", e)))?;
+
+        if &hdr[0..8] != THUMBNAIL_ATLAS_MAGIC {
+            return Err(MediaError::CorruptFile(
+                "Invalid thumbnail atlas magic (expected AETHTHMB)".to_string(),
+            ));
+        }
+        let version = u32::from_le_bytes(hdr[8..12].try_into().unwrap());
+        if version != THUMBNAIL_ATLAS_VERSION {
+            return Err(MediaError::CorruptFile(format!(
+                "Unsupported thumbnail atlas version: {}",
+                version
+            )));
+        }
+        let codec = ThumbnailCodec::from_tag(hdr[12], hdr[13])?;
+        let thumb_width = u32::from_le_bytes(hdr[16..20].try_into().unwrap());
+        let thumb_height = u32::from_le_bytes(hdr[20..24].try_into().unwrap());
+        let atlas_columns = u16::from_le_bytes(hdr[24..26].try_into().unwrap());
+        let atlas_rows = u16::from_le_bytes(hdr[26..28].try_into().unwrap());
+        let tb_num = i32::from_le_bytes(hdr[28..32].try_into().unwrap());
+        let tb_den = i32::from_le_bytes(hdr[32..36].try_into().unwrap());
+        if tb_num <= 0 || tb_den <= 0 {
+            return Err(MediaError::CorruptFile(
+                "Invalid timebase in thumbnail atlas header".to_string(),
+            ));
+        }
+        let entry_count = u32::from_le_bytes(hdr[36..40].try_into().unwrap());
+        let payload_section_offset = u64::from_le_bytes(hdr[40..48].try_into().unwrap());
+
+        Ok(ThumbnailFilmstripHeader {
+            version,
+            codec,
+            thumb_width,
+            thumb_height,
+            atlas_columns,
+            atlas_rows,
+            timebase: Rational {
+                num: tb_num,
+                den: tb_den,
+            },
+            entry_count,
+            payload_section_offset,
+        })
+    }
+
+    /// Reads all contiguous 24-byte `ThumbnailIndexEntry` entries from the `.atlas` file
+    /// without loading compressed image payloads into memory.
+    pub fn read_index_entries_from_file(path: &Path) -> Result<Vec<ThumbnailIndexEntry>, MediaError> {
+        let header = Self::read_header_from_file(path)?;
+        let count = header.entry_count as usize;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut file = File::open(path).map_err(|e| MediaError::IoError(e.to_string()))?;
+        file.seek(SeekFrom::Start(THUMBNAIL_HEADER_SIZE as u64))
+            .map_err(|e| MediaError::IoError(e.to_string()))?;
+
+        let mut index_bytes = vec![0u8; count * THUMBNAIL_INDEX_ENTRY_SIZE];
+        file.read_exact(&mut index_bytes)
+            .map_err(|e| MediaError::CorruptFile(format!("Truncated atlas index table: {}", e)))?;
+
+        let mut entries = Vec::with_capacity(count);
+        for chunk in index_bytes.chunks_exact(THUMBNAIL_INDEX_ENTRY_SIZE) {
+            let raw: [u8; THUMBNAIL_INDEX_ENTRY_SIZE] = chunk.try_into().unwrap();
+            entries.push(ThumbnailIndexEntry::from_le_bytes(raw));
+        }
+        Ok(entries)
+    }
+
+    /// Reads a single compressed thumbnail payload from disk using its [`ThumbnailIndexEntry`].
+    pub fn read_thumbnail_payload_from_file(
+        path: &Path,
+        entry: &ThumbnailIndexEntry,
+    ) -> Result<Vec<u8>, MediaError> {
+        let mut file = File::open(path).map_err(|e| MediaError::IoError(e.to_string()))?;
+        file.seek(SeekFrom::Start(entry.byte_offset))
+            .map_err(|e| MediaError::IoError(e.to_string()))?;
+        let mut payload = vec![0u8; entry.byte_len as usize];
+        file.read_exact(&mut payload)
+            .map_err(|e| MediaError::CorruptFile(format!("Truncated thumbnail payload: {}", e)))?;
+        Ok(payload)
     }
 
     /// Saves the `.atlas` file atomically via [`crate::cache::write_atomic`].
@@ -506,26 +624,42 @@ pub fn encode_video_frame_thumbnail(
     target_height: u32,
     codec: ThumbnailCodec,
 ) -> Result<Vec<u8>, MediaError> {
-    let mut owned = frame.clone();
-    owned.ensure_rgba8();
-
-    let src_w = owned.width.max(1);
-    let src_h = owned.height.max(1);
+    let src_w = frame.width.max(1);
+    let src_h = frame.height.max(1);
     let expected_len = (src_w as usize) * (src_h as usize) * 4;
-    if owned.data.len() < expected_len {
-        return Err(MediaError::CorruptFile(
-            "VideoFrame RGBA buffer smaller than dimensions".to_string(),
-        ));
-    }
 
-    let img = RgbaImage::from_raw(src_w, src_h, owned.data[..expected_len].to_vec()).ok_or_else(
-        || MediaError::CorruptFile("Failed to construct RgbaImage from VideoFrame".to_string()),
-    )?;
+    let (src_w, src_h, raw_rgba) = if frame.format == PixelFormat::Rgba8 {
+        if frame.data.len() < expected_len {
+            return Err(MediaError::CorruptFile(
+                "VideoFrame RGBA buffer smaller than dimensions".to_string(),
+            ));
+        }
+        (src_w, src_h, frame.data[..expected_len].to_vec())
+    } else {
+        let mut owned = frame.clone();
+        owned.ensure_rgba8();
+        let expected_owned = (owned.width.max(1) as usize) * (owned.height.max(1) as usize) * 4;
+        if owned.data.len() < expected_owned {
+            return Err(MediaError::CorruptFile(
+                "VideoFrame RGBA buffer smaller than dimensions".to_string(),
+            ));
+        }
+        (owned.width.max(1), owned.height.max(1), owned.data)
+    };
+
+    let img = RgbaImage::from_raw(src_w, src_h, raw_rgba).ok_or_else(|| {
+        MediaError::CorruptFile("Failed to construct RgbaImage from VideoFrame".to_string())
+    })?;
 
     let resized = if src_w == target_width && src_h == target_height {
         img
     } else {
-        image::imageops::resize(&img, target_width.max(1), target_height.max(1), FilterType::Triangle)
+        image::imageops::resize(
+            &img,
+            target_width.max(1),
+            target_height.max(1),
+            FilterType::Triangle,
+        )
     };
 
     encode_rgba_image(
@@ -608,7 +742,39 @@ pub fn resolve_sample_pts_list(
                     return pts_list;
                 }
             }
-            // Fallback if container has no `.fidx` index (e.g. still image or non-ISO-BMFF):
+            // Fallback if container has no `.index` index (e.g. still image or non-ISO-BMFF):
+            build_fixed_pts_schedule(duration_pts, min_gap.max((fps_ratio.round() as i64).max(1)))
+        }
+        ThumbnailStrategy::KeyframesOrInterval {
+            min_interval_pts,
+            max_gap_pts,
+        } => {
+            let min_gap = min_interval_pts.max(1);
+            let max_gap = max_gap_pts.max(min_gap);
+            if let Ok(fidx) =
+                build_or_load_frame_index_with_timebase(media_path, timebase, cache_manager)
+            {
+                let mut pts_list = Vec::new();
+                let mut last_pts: Option<i64> = None;
+                for entry in fidx.entries() {
+                    if entry.is_keyframe() {
+                        if let Some(prev) = last_pts {
+                            let mut fill = prev + min_gap;
+                            while fill + min_gap <= entry.pts && fill < prev + max_gap {
+                                pts_list.push(fill);
+                                fill += min_gap;
+                            }
+                        }
+                        if last_pts.map_or(true, |prev| entry.pts - prev >= min_gap) {
+                            pts_list.push(entry.pts);
+                            last_pts = Some(entry.pts);
+                        }
+                    }
+                }
+                if !pts_list.is_empty() {
+                    return pts_list;
+                }
+            }
             build_fixed_pts_schedule(duration_pts, min_gap.max((fps_ratio.round() as i64).max(1)))
         }
         ThumbnailStrategy::FixedIntervalPts { interval_pts } => {
@@ -652,6 +818,40 @@ pub fn extract_thumbnail_filmstrip(
     cancel_flag: Option<&AtomicBool>,
     progress_per_mille: Option<&AtomicU32>,
 ) -> Result<ThumbnailFilmstrip, MediaError> {
+    if let Some(cancel) = cancel_flag {
+        if cancel.load(Ordering::Acquire) {
+            return Err(MediaError::IoError(
+                "Thumbnail filmstrip extraction cancelled before start".to_string(),
+            ));
+        }
+    }
+
+    // Auto-infer project CacheManager from output_path if not explicitly provided
+    let inferred_cache_mgr;
+    let effective_cache_mgr = match cache_manager {
+        Some(mgr) => Some(mgr),
+        None => {
+            if let Some(out_p) = output_path {
+                if let Some(parent) = out_p.parent() {
+                    if parent.file_name().and_then(|n| n.to_str()) == Some("thumbs") {
+                        if let Some(cache_root) = parent.parent() {
+                            inferred_cache_mgr = Some(CacheManager::new(cache_root));
+                            inferred_cache_mgr.as_ref()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+    };
+
     let mut decoder = open_video_decoder_with_timebase(media_path_or_uri, timebase)
         .map_err(|e| MediaError::CorruptFile(format!("Failed to open video decoder: {}", e)))?;
 
@@ -670,7 +870,10 @@ pub fn extract_thumbnail_filmstrip(
                 let step = ((interval_seconds.max(0.05)) * fps).round() as i64;
                 build_fixed_pts_schedule(duration_pts, step.max(1))
             }
-            ThumbnailStrategy::Keyframes { min_interval_pts } => {
+            ThumbnailStrategy::Keyframes { min_interval_pts }
+            | ThumbnailStrategy::KeyframesOrInterval {
+                min_interval_pts, ..
+            } => {
                 build_fixed_pts_schedule(duration_pts, min_interval_pts.max(15))
             }
         }
@@ -680,7 +883,7 @@ pub fn extract_thumbnail_filmstrip(
             duration_pts,
             timebase,
             strategy,
-            cache_manager,
+            effective_cache_mgr,
         )
     };
 
@@ -689,7 +892,7 @@ pub fn extract_thumbnail_filmstrip(
 
     for (idx, &pts) in sample_pts.iter().enumerate() {
         if let Some(cancel) = cancel_flag {
-            if cancel.load(Ordering::Relaxed) {
+            if cancel.load(Ordering::Acquire) {
                 return Err(MediaError::IoError(
                     "Thumbnail filmstrip extraction cancelled".to_string(),
                 ));
@@ -709,6 +912,14 @@ pub fn extract_thumbnail_filmstrip(
         if let Some(prog) = progress_per_mille {
             let p = (((idx + 1) * 950) / total).min(950) as u32;
             prog.store(p, Ordering::Relaxed);
+        }
+    }
+
+    if let Some(cancel) = cancel_flag {
+        if cancel.load(Ordering::Acquire) {
+            return Err(MediaError::IoError(
+                "Thumbnail filmstrip extraction cancelled".to_string(),
+            ));
         }
     }
 
@@ -737,6 +948,14 @@ pub struct ThumbnailJobHandle {
     progress_per_mille: Arc<AtomicU32>,
     finished_flag: Arc<AtomicBool>,
     join_handle: Option<JoinHandle<Result<ThumbnailFilmstrip, MediaError>>>,
+}
+
+impl Drop for ThumbnailJobHandle {
+    fn drop(&mut self) {
+        // Automatically request cancellation if handle is dropped before completion,
+        // avoiding orphaned background worker threads and file descriptor leaks.
+        self.cancel();
+    }
 }
 
 impl ThumbnailJobHandle {
@@ -779,6 +998,30 @@ pub fn spawn_thumbnail_filmstrip_worker(
     strategy: ThumbnailStrategy,
     timebase: Rational,
 ) -> Result<ThumbnailJobHandle, MediaError> {
+    spawn_thumbnail_filmstrip_worker_with_cache(
+        media_path_or_uri,
+        output_path,
+        thumb_width,
+        thumb_height,
+        codec,
+        strategy,
+        timebase,
+        None,
+    )
+}
+
+/// Spawns a non-blocking background worker thread to extract timeline thumbnails
+/// (`160x90` default) and persist the `.atlas` file with an optional explicit [`CacheManager`].
+pub fn spawn_thumbnail_filmstrip_worker_with_cache(
+    media_path_or_uri: impl Into<String>,
+    output_path: Option<PathBuf>,
+    thumb_width: u32,
+    thumb_height: u32,
+    codec: ThumbnailCodec,
+    strategy: ThumbnailStrategy,
+    timebase: Rational,
+    cache_manager: Option<CacheManager>,
+) -> Result<ThumbnailJobHandle, MediaError> {
     let media_str = media_path_or_uri.into();
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let progress = Arc::new(AtomicU32::new(0));
@@ -799,7 +1042,7 @@ pub fn spawn_thumbnail_filmstrip_worker(
                 codec,
                 strategy,
                 timebase,
-                None,
+                cache_manager.as_ref(),
                 Some(&cancel_clone),
                 Some(&progress_clone),
             );
@@ -936,5 +1179,208 @@ mod tests {
         assert!(!strip.is_empty());
         assert_eq!(strip.entries[0].pts, 0);
         assert!(atlas_path.exists());
+    }
+
+    #[test]
+    fn validates_index_offsets_and_image_payloads_from_video() {
+        let dir = tempdir().unwrap();
+        let atlas_path = dir.path().join("validate_offsets.atlas");
+
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("sample_64x64_10frames.mp4");
+        let uri = if fixture.exists() {
+            fixture.to_str().unwrap().to_string()
+        } else {
+            "synthetic://smpte?width=320&height=180&fps=30&duration=1.0".to_string()
+        };
+
+        let strip = extract_thumbnail_filmstrip(
+            &uri,
+            Some(&atlas_path),
+            160,
+            90,
+            ThumbnailCodec::Jpeg { quality: 85 },
+            ThumbnailStrategy::FixedIntervalPts { interval_pts: 10 },
+            Rational { num: 60, den: 1 },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(!strip.is_empty());
+        assert!(atlas_path.exists());
+
+        // 1. Verify 48-byte header reading
+        let header = ThumbnailFilmstrip::read_header_from_file(&atlas_path).unwrap();
+        assert_eq!(header.version, THUMBNAIL_ATLAS_VERSION);
+        assert_eq!(header.thumb_width, 160);
+        assert_eq!(header.thumb_height, 90);
+        assert_eq!(header.entry_count as usize, strip.len());
+        assert_eq!(
+            header.payload_section_offset,
+            (THUMBNAIL_HEADER_SIZE + strip.len() * THUMBNAIL_INDEX_ENTRY_SIZE) as u64
+        );
+
+        // 2. Verify contiguous index entries
+        let entries = ThumbnailFilmstrip::read_index_entries_from_file(&atlas_path).unwrap();
+        assert_eq!(entries.len(), strip.len());
+
+        let total_file_size = std::fs::metadata(&atlas_path).unwrap().len();
+
+        for i in 0..entries.len() {
+            let entry = entries[i];
+            assert!(entry.byte_offset >= header.payload_section_offset);
+            assert!(entry.byte_offset + (entry.byte_len as u64) <= total_file_size);
+            assert!(entry.byte_len > 0);
+
+            if i + 1 < entries.len() {
+                let next = entries[i + 1];
+                assert!(entry.pts <= next.pts, "PTS must be monotonically non-decreasing");
+                assert_eq!(
+                    entry.byte_offset + (entry.byte_len as u64),
+                    next.byte_offset,
+                    "Payloads must be contiguously packed without gaps"
+                );
+            }
+
+            // 3. Verify direct payload seek and image decodability
+            let payload =
+                ThumbnailFilmstrip::read_thumbnail_payload_from_file(&atlas_path, &entry).unwrap();
+            assert_eq!(payload.len(), entry.byte_len as usize);
+
+            let img = image::load_from_memory(&payload).unwrap();
+            assert_eq!(img.width(), 160);
+            assert_eq!(img.height(), 90);
+        }
+
+        // 4. Verify boundary condition seeking
+        let (first, _) =
+            ThumbnailFilmstrip::read_thumbnail_at_or_before_from_file(&atlas_path, -100)
+                .unwrap()
+                .unwrap();
+        assert_eq!(first.pts, entries[0].pts);
+
+        let (last, _) =
+            ThumbnailFilmstrip::read_thumbnail_at_or_before_from_file(&atlas_path, 999_999)
+                .unwrap()
+                .unwrap();
+        assert_eq!(last.pts, entries.last().unwrap().pts);
+    }
+
+    #[test]
+    fn worker_graceful_cancellation_and_no_partial_file() {
+        let dir = tempdir().unwrap();
+        let atlas_path = dir.path().join("cancelled.atlas");
+
+        let uri = "synthetic://colorbars?width=640&height=360&fps=30&duration=3.0";
+        let worker = spawn_thumbnail_filmstrip_worker(
+            uri,
+            Some(atlas_path.clone()),
+            160,
+            90,
+            ThumbnailCodec::WebP,
+            ThumbnailStrategy::FixedIntervalPts { interval_pts: 2 },
+            Rational { num: 60, den: 1 },
+        )
+        .unwrap();
+
+        // Immediately trigger cancellation
+        worker.cancel();
+
+        let res = worker.join();
+        assert!(res.is_err(), "Worker should report cancellation error");
+        let err_msg = match res {
+            Err(MediaError::IoError(msg)) => msg,
+            other => panic!("Expected IoError with cancellation, got {:?}", other),
+        };
+        assert!(
+            err_msg.contains("cancelled"),
+            "Error message should mention cancellation: {}",
+            err_msg
+        );
+
+        // Confirm no incomplete or corrupt output file remains
+        assert!(!atlas_path.exists(), "Cancelled job must not leave output file on disk");
+    }
+
+    #[test]
+    fn cancellation_before_start_halts_immediately() {
+        let cancel_flag = AtomicBool::new(true);
+        let uri = "synthetic://colorbars?width=320&height=180&fps=30&duration=1.0";
+
+        let res = extract_thumbnail_filmstrip(
+            uri,
+            None,
+            160,
+            90,
+            ThumbnailCodec::Jpeg { quality: 80 },
+            ThumbnailStrategy::FixedIntervalPts { interval_pts: 10 },
+            Rational { num: 60, den: 1 },
+            None,
+            Some(&cancel_flag),
+            None,
+        );
+
+        assert!(res.is_err());
+        let err_str = match res {
+            Err(MediaError::IoError(e)) => e,
+            other => panic!("Expected IoError, got {:?}", other),
+        };
+        assert!(err_str.contains("cancelled before start"));
+    }
+
+    #[test]
+    fn worker_drop_triggers_cancellation_without_panics() {
+        let uri = "synthetic://colorbars?width=640&height=360&fps=30&duration=5.0";
+        let worker = spawn_default_thumbnail_worker(
+            uri,
+            None,
+            ThumbnailCodec::Jpeg { quality: 50 },
+            ThumbnailStrategy::FixedIntervalPts { interval_pts: 5 },
+        )
+        .unwrap();
+
+        // Dropping handle must trigger drop() -> cancel()
+        drop(worker);
+        thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    #[test]
+    fn keyframes_or_interval_fills_large_gaps() {
+        let schedule = build_fixed_pts_schedule(100, 25);
+        assert_eq!(schedule, vec![0, 25, 50, 75]);
+
+        let empty = build_fixed_pts_schedule(0, 10);
+        assert_eq!(empty, vec![0]);
+    }
+
+    #[test]
+    fn corrupt_atlas_files_are_rejected() {
+        // Truncated header
+        let truncated = vec![0u8; 20];
+        assert!(ThumbnailFilmstrip::from_bytes(&truncated).is_err());
+
+        // Invalid magic
+        let mut bad_magic = vec![0u8; 48];
+        bad_magic[0..8].copy_from_slice(b"BADMAGIC");
+        assert!(ThumbnailFilmstrip::from_bytes(&bad_magic).is_err());
+
+        // Out-of-order PTS
+        let mut out_of_order = ThumbnailFilmstrip::from_encoded_frames(
+            ThumbnailCodec::Jpeg { quality: 80 },
+            160,
+            90,
+            Rational { num: 60, den: 1 },
+            vec![(10, vec![1, 2, 3]), (20, vec![4, 5, 6])],
+        )
+        .to_bytes();
+        // Swap PTS values in the index table
+        // Entry 0 PTS is at offset 48, Entry 1 PTS is at offset 48+24 = 72
+        out_of_order[48..56].copy_from_slice(&25i64.to_le_bytes());
+        out_of_order[72..80].copy_from_slice(&10i64.to_le_bytes());
+        assert!(ThumbnailFilmstrip::from_bytes(&out_of_order).is_err());
     }
 }

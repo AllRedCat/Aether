@@ -10,10 +10,12 @@ import '../media_pool/media_pool_provider.dart';
 @immutable
 class WaveformQuery {
   final String assetId;
+  final int channel;
   final int lod;
 
   const WaveformQuery({
     required this.assetId,
+    this.channel = 0,
     this.lod = 0,
   });
 
@@ -23,14 +25,19 @@ class WaveformQuery {
       other is WaveformQuery &&
           runtimeType == other.runtimeType &&
           assetId == other.assetId &&
+          channel == other.channel &&
           lod == other.lod;
 
   @override
-  int get hashCode => assetId.hashCode ^ lod.hashCode;
+  int get hashCode => assetId.hashCode ^ channel.hashCode ^ lod.hashCode;
 }
+
+/// Convenience alias to bridge `AudioPeakData`
+typedef AudioPeak = AudioPeakData;
 
 typedef FetchAudioWaveformFn = Future<List<AudioPeak>> Function({
   required String assetId,
+  required int channel,
   required int lod,
 });
 
@@ -40,9 +47,28 @@ final audioWaveformFetcherProvider = Provider<FetchAudioWaveformFn>((ref) {
   return getAudioWaveform;
 });
 
+/// Timeline zoom factor represented as pixels per second of playback.
+final timelineZoomProvider = StateProvider<double>((ref) => 50.0);
+
+/// Computes the optimal audio pyramid Level-of-Detail (LOD 0..3)
+/// given a timeline zoom factor in `pixels_per_second` and sample rate.
+int computeAudioLodForZoom(double pixelsPerSecond, {int sampleRate = 48000}) {
+  if (pixelsPerSecond <= 0) return 0;
+  final samplesPerPixel = sampleRate / pixelsPerSecond;
+  if (samplesPerPixel >= 16384) {
+    return 3;
+  } else if (samplesPerPixel >= 4096) {
+    return 2;
+  } else if (samplesPerPixel >= 1024) {
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
 /// Reactive provider that loads `List<AudioPeak>` (`min`, `max`, `rms`) for a
 /// clip's `assetId` and `lod` directly from the binary `.peak` cache via FFI.
-/// Automatically re-evaluates when background indexing for `assetId` completes.
+/// Automatically re-evaluates when background indexing or analysis for `assetId` completes.
 final clipWaveformProvider =
     FutureProvider.family<List<AudioPeak>, WaveformQuery>((ref, query) async {
   if (query.assetId.isEmpty) return const <AudioPeak>[];
@@ -53,10 +79,24 @@ final clipWaveformProvider =
       (s) => s.indexingProgress[query.assetId]?.stage,
     ),
   );
+  ref.watch(
+    mediaPoolProvider.select(
+      (s) => s.analysisProgress[query.assetId]?.step,
+    ),
+  );
+  ref.watch(
+    mediaPoolProvider.select(
+      (s) => s.analysisProgress[query.assetId]?.progress == 1.0,
+    ),
+  );
 
   final fetchFn = ref.watch(audioWaveformFetcherProvider);
   try {
-    return await fetchFn(assetId: query.assetId, lod: query.lod);
+    return await fetchFn(
+      assetId: query.assetId,
+      channel: query.channel,
+      lod: query.lod,
+    );
   } catch (_) {
     return const <AudioPeak>[];
   }
@@ -71,6 +111,7 @@ class TimelineState {
   final List<Track> tracks;
   final bool isLoading;
   final String? errorMessage;
+  final double pixelsPerSecond;
 
   const TimelineState({
     this.timeline,
@@ -79,6 +120,7 @@ class TimelineState {
     this.tracks = const [],
     this.isLoading = false,
     this.errorMessage,
+    this.pixelsPerSecond = 50.0,
   });
 
   const TimelineState.initial()
@@ -87,11 +129,13 @@ class TimelineState {
         durationPts = 0,
         tracks = const [],
         isLoading = false,
-        errorMessage = null;
+        errorMessage = null,
+        pixelsPerSecond = 50.0;
 
   factory TimelineState.fromTimeline(
     Timeline timeline, {
     bool isLoading = false,
+    double pixelsPerSecond = 50.0,
   }) {
     final count = timeline.tracks.fold<int>(
       0,
@@ -104,6 +148,7 @@ class TimelineState {
       tracks: timeline.tracks,
       isLoading: isLoading,
       errorMessage: null,
+      pixelsPerSecond: pixelsPerSecond,
     );
   }
 
@@ -115,6 +160,7 @@ class TimelineState {
     bool? isLoading,
     String? errorMessage,
     bool clearError = false,
+    double? pixelsPerSecond,
   }) {
     return TimelineState(
       timeline: timeline ?? this.timeline,
@@ -123,6 +169,7 @@ class TimelineState {
       tracks: tracks ?? this.tracks,
       isLoading: isLoading ?? this.isLoading,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      pixelsPerSecond: pixelsPerSecond ?? this.pixelsPerSecond,
     );
   }
 
@@ -136,7 +183,8 @@ class TimelineState {
           durationPts == other.durationPts &&
           listEquals(tracks, other.tracks) &&
           isLoading == other.isLoading &&
-          errorMessage == other.errorMessage;
+          errorMessage == other.errorMessage &&
+          pixelsPerSecond == other.pixelsPerSecond;
 
   @override
   int get hashCode =>
@@ -145,7 +193,8 @@ class TimelineState {
       durationPts.hashCode ^
       tracks.hashCode ^
       isLoading.hashCode ^
-      errorMessage.hashCode;
+      errorMessage.hashCode ^
+      pixelsPerSecond.hashCode;
 }
 
 /// StateNotifier coordinating Timeline operations between UI and Rust FFI.

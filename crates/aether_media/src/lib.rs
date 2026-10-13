@@ -690,6 +690,7 @@ pub mod decoder;
 pub mod frame_index;
 pub mod importer;
 pub mod isobmff;
+pub mod playback;
 pub mod thumbnails;
 
 /// Alias module `aether_media::audio::peaks` for ergonomic access.
@@ -701,8 +702,8 @@ pub use audio_peaks::{
     build_lod_chain_from_base, build_peak_pyramid_from_interleaved, compute_min_max,
     compute_window_peak, downsample_lod_level, generate_waveform_cache,
     generate_waveform_cache_pyramid, sanitize_pcm_sample, spawn_waveform_cache_worker,
-    AudioPeakLodLevel, AudioPeakPyramid, AudioPeakSample, WaveformJobHandle,
-    DEFAULT_BASE_SAMPLES_PER_PEAK, DEFAULT_LOD_LEVELS,
+    AudioPeak, AudioPeakLodLevel, AudioPeakPyramid, AudioPeakSample, WaveformJobHandle,
+    DEFAULT_BASE_SAMPLES_PER_PEAK, DEFAULT_LOD_FACTOR, DEFAULT_LOD_LEVELS,
 };
 pub use cache::{
     compute_fingerprint_from_parts, compute_source_fingerprint, CacheManager, SourceFingerprint,
@@ -727,8 +728,14 @@ pub use importer::{
 pub use thumbnails::{
     encode_rgba_image, encode_video_frame_thumbnail, extract_thumbnail_filmstrip,
     resolve_sample_pts_list, spawn_default_thumbnail_worker, spawn_thumbnail_filmstrip_worker,
-    ThumbnailCodec, ThumbnailFilmstrip, ThumbnailIndexEntry, ThumbnailJobHandle,
-    ThumbnailStrategy, DEFAULT_THUMBNAIL_HEIGHT, DEFAULT_THUMBNAIL_WIDTH,
+    spawn_thumbnail_filmstrip_worker_with_cache, ThumbnailCodec, ThumbnailFilmstrip,
+    ThumbnailFilmstripHeader, ThumbnailIndexEntry, ThumbnailJobHandle, ThumbnailStrategy,
+    DEFAULT_THUMBNAIL_HEIGHT, DEFAULT_THUMBNAIL_WIDTH, THUMBNAIL_ATLAS_MAGIC,
+    THUMBNAIL_ATLAS_VERSION, THUMBNAIL_HEADER_SIZE, THUMBNAIL_INDEX_ENTRY_SIZE,
+};
+pub use playback::{
+    BufferError, FrameAction, FrameDropper, LookaheadRingBuffer, MasterClock,
+    DEFAULT_LOOKAHEAD_CAPACITY, MIN_LOOKAHEAD_CAPACITY,
 };
 
 #[cfg(target_os = "macos")]

@@ -354,6 +354,7 @@ class MediaPoolView extends ConsumerWidget {
         final item = state.items[index];
         final isSelected = state.selectedItemId == item.id;
         final itemProgress = state.progressForItem(item.id);
+        final itemAnalysis = state.analysisProgressForItem(item.id);
 
         return _buildMediaItemCard(
           context,
@@ -361,6 +362,7 @@ class MediaPoolView extends ConsumerWidget {
           isSelected,
           notifier,
           itemProgress: itemProgress,
+          itemAnalysis: itemAnalysis,
         );
       },
     );
@@ -372,12 +374,37 @@ class MediaPoolView extends ConsumerWidget {
     bool isSelected,
     MediaPoolNotifier notifier, {
     ImportProgress? itemProgress,
+    MediaAnalysisProgress? itemAnalysis,
   }) {
     final typeColor = MediaFormatter.typeColor(item.mediaType);
     final typeIcon = MediaFormatter.typeIcon(item.mediaType);
     final typeLabel = MediaFormatter.typeLabel(item.mediaType);
     final durationStr = MediaFormatter.formatItemDuration(item);
-    final isItemIndexing = itemProgress != null && !itemProgress.isDone;
+
+    final isIndexingActive = itemProgress != null && !itemProgress.isDone;
+    final isAnalysisActive = itemAnalysis != null &&
+        !(itemAnalysis.step == 'thumbnails' && itemAnalysis.progress >= 1.0);
+    final isItemBusy = isIndexingActive || isAnalysisActive;
+
+    String progressLabel = '';
+    double progressFraction = 0.0;
+    if (isAnalysisActive) {
+      final p = itemAnalysis.progress.clamp(0.0, 1.0);
+      progressFraction = p;
+      if (itemAnalysis.step == 'indexing') {
+        progressLabel = 'Indexando ${(p * 100).round()}%';
+      } else if (itemAnalysis.step == 'audio_peaks') {
+        progressLabel = 'Forma de onda ${(p * 100).round()}%';
+      } else if (itemAnalysis.step == 'thumbnails') {
+        progressLabel = 'Miniaturas ${(p * 100).round()}%';
+      } else {
+        progressLabel = 'Processando ${(p * 100).round()}%';
+      }
+    } else if (isIndexingActive) {
+      final p = itemProgress.progress.clamp(0.0, 1.0);
+      progressFraction = p;
+      progressLabel = 'Indexando ${(p * 100).round()}%';
+    }
 
     return Container(
       key: Key('media_item_${item.id}'),
@@ -474,19 +501,40 @@ class MediaPoolView extends ConsumerWidget {
                                 ),
                               ),
                             ],
-                            if (isItemIndexing) ...[
+                            if (isItemBusy) ...[
                               const SizedBox(width: 6),
                               Flexible(
-                                child: Text(
-                                  'Indexando ${(itemProgress.progress.clamp(0.0, 1.0) * 100).round()}%',
-                                  key: Key('media_item_indexing_${item.id}'),
-                                  style: const TextStyle(
-                                    color: CatppuccinMocha.teal,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    SizedBox(
+                                      width: 8,
+                                      height: 8,
+                                      child: CircularProgressIndicator(
+                                        key: Key(
+                                            'media_item_indexing_spinner_${item.id}'),
+                                        strokeWidth: 1.5,
+                                        valueColor:
+                                            const AlwaysStoppedAnimation<Color>(
+                                          CatppuccinMocha.teal,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Flexible(
+                                      child: Text(
+                                        progressLabel,
+                                        key: Key('media_item_indexing_${item.id}'),
+                                        style: const TextStyle(
+                                          color: CatppuccinMocha.teal,
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ],
@@ -526,13 +574,13 @@ class MediaPoolView extends ConsumerWidget {
                   ),
                 ],
               ),
-              if (isItemIndexing) ...[
+              if (isItemBusy) ...[
                 const SizedBox(height: 6),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(2),
                   child: LinearProgressIndicator(
                     key: Key('media_item_progress_bar_${item.id}'),
-                    value: itemProgress.progress.clamp(0.0, 1.0),
+                    value: progressFraction.clamp(0.0, 1.0),
                     minHeight: 2,
                     backgroundColor: CatppuccinMocha.surface0,
                     valueColor: const AlwaysStoppedAnimation<Color>(

@@ -54,27 +54,32 @@ impl PacketRecord {
         (self.flags & FLAG_IS_DISPOSABLE) != 0
     }
 
-    /// Converts this packet record into a 24-byte [`FrameIndexEntry`] whose
-    /// `pts` is expressed in `target_timebase` ticks (or track timescale if
+    /// Converts this packet record into a 32-byte [`FrameIndexEntry`] whose
+    /// `pts` and `dts` are expressed in `target_timebase` ticks (or track timescale if
     /// `track_timescale == 0`).
     pub fn to_frame_index_entry(
         &self,
         track_timescale: u32,
         target_timebase: Rational,
     ) -> FrameIndexEntry {
-        let converted_pts = if track_timescale > 0
+        let (converted_pts, converted_dts) = if track_timescale > 0
             && target_timebase.num > 0
             && target_timebase.den > 0
         {
-            let sec = self.pts as f64 / track_timescale as f64;
             let fps_ratio = target_timebase.num as f64 / target_timebase.den as f64;
-            (sec * fps_ratio).round() as i64
+            let pts_sec = self.pts as f64 / track_timescale as f64;
+            let dts_sec = self.dts as f64 / track_timescale as f64;
+            (
+                (pts_sec * fps_ratio).round() as i64,
+                (dts_sec * fps_ratio).round() as i64,
+            )
         } else {
-            self.pts
+            (self.pts, self.dts)
         };
 
         FrameIndexEntry {
             pts: converted_pts,
+            dts: converted_dts,
             file_offset: self.file_offset,
             packet_size: self.packet_size,
             flags: self.flags,
@@ -147,6 +152,7 @@ impl VideoTrackAnalysis {
             .iter()
             .map(|p| FrameIndexEntry {
                 pts: p.pts,
+                dts: p.dts,
                 file_offset: p.file_offset,
                 packet_size: p.packet_size,
                 flags: p.flags,

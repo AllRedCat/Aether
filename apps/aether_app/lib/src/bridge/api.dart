@@ -9,7 +9,7 @@ import 'package:uuid/uuid.dart';
 
 // These functions are ignored because they are not marked as `pub`: `default_standalone_cache_mgr`, `emit_import_progress`, `ingest_and_schedule_caches`, `register_media_item_in_cache`, `register_project_assets`, `resolve_cache_manager`, `spawn_background_asset_indexing`
 // These types are ignored because they are not used by any `pub` functions: `RegisteredAsset`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 Future<void> initEngine() => RustLib.instance.api.crateApiInitEngine();
 
@@ -64,13 +64,35 @@ Future<MediaItem> importMediaFile(
         .crateApiImportMediaFile(projectPath: projectPath, filePath: filePath);
 
 /// Reads a single Level-of-Detail (`lod`) slice of audio waveform peaks (`min`, `max`, `rms`)
-/// for `asset_id` directly from the binary `.peak` / `.aether_peaks` sidecar cache on disk,
+/// for `asset_id` and `channel` directly from the binary `.peak` / `.aether_peaks` sidecar cache on disk,
 /// without reading or decoding the original audio file during timeline rendering.
 ///
-/// If the `.peak` sidecar has not yet been written to disk, it is generated once and cached.
-Future<List<AudioPeak>> getAudioWaveform(
-        {required String assetId, required int lod}) =>
-    RustLib.instance.api.crateApiGetAudioWaveform(assetId: assetId, lod: lod);
+/// If `channel` is within channel bounds, returns peaks for that specific channel;
+/// otherwise returns mono mixdown.
+Future<List<AudioPeakData>> getAudioWaveform(
+        {required String assetId, required int channel, required int lod}) =>
+    RustLib.instance.api
+        .crateApiGetAudioWaveform(assetId: assetId, channel: channel, lod: lod);
+
+/// Reads a single timeline thumbnail image payload (compressed JPEG or WebP bytes)
+/// from the asset's binary `.atlas` sidecar file for presentation timestamp `pts`.
+/// Returns `Ok(Some(bytes))` if the thumbnail is available, or `Ok(None)` if no thumbnails
+/// have been generated or the asset is not an indexed video.
+Future<Uint8List?> getTimelineThumbnail(
+        {required String assetId, required int pts}) =>
+    RustLib.instance.api
+        .crateApiGetTimelineThumbnail(assetId: assetId, pts: pts);
+
+/// Starts an asynchronous media analysis background worker that generates:
+/// 1. Temporal GOP Frame Index (`.index`) — emits step: `"indexing"`
+/// 2. Audio Waveform Pyramid (`.peak`) — emits step: `"audio_peaks"`
+/// 3. Timeline Filmstrip Atlas (`.atlas`) — emits step: `"thumbnails"`
+///
+/// Progress updates from `0.0` to `1.0` are pushed to `sink` without blocking the caller.
+Stream<MediaAnalysisProgress> startMediaAnalysisStream(
+        {required String assetId, required String path}) =>
+    RustLib.instance.api
+        .crateApiStartMediaAnalysisStream(assetId: assetId, path: path);
 
 /// Attaches a `StreamSink<ImportProgress>` to receive asynchronous progress notifications
 /// while media assets are inspected, indexed (`.fidx`), and cached (`.peak`, `.atlas`).
@@ -193,12 +215,12 @@ Future<BridgeFrame> extractSingleFrame(
 
 /// Single audio waveform peak bin (`min`, `max`, `rms` in normalized `[-1.0, 1.0]`)
 /// exposed across the FFI boundary for zero-decode timeline waveform rendering.
-class AudioPeak {
+class AudioPeakData {
   final double min;
   final double max;
   final double rms;
 
-  const AudioPeak({
+  const AudioPeakData({
     required this.min,
     required this.max,
     required this.rms,
@@ -210,7 +232,7 @@ class AudioPeak {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is AudioPeak &&
+      other is AudioPeakData &&
           runtimeType == other.runtimeType &&
           min == other.min &&
           max == other.max &&
@@ -357,6 +379,35 @@ enum ImportStage {
   completed,
   failed,
   ;
+}
+
+/// Progress event emitted across FFI during media analysis (`"indexing"`, `"audio_peaks"`, `"thumbnails"`).
+class MediaAnalysisProgress {
+  final String assetId;
+
+  /// Pipeline step: `"indexing"`, `"audio_peaks"`, or `"thumbnails"`.
+  final String step;
+
+  /// Normalized step progress in `[0.0, 1.0]`.
+  final double progress;
+
+  const MediaAnalysisProgress({
+    required this.assetId,
+    required this.step,
+    required this.progress,
+  });
+
+  @override
+  int get hashCode => assetId.hashCode ^ step.hashCode ^ progress.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MediaAnalysisProgress &&
+          runtimeType == other.runtimeType &&
+          assetId == other.assetId &&
+          step == other.step &&
+          progress == other.progress;
 }
 
 /// Complete descriptive, technical, and sidecar cache metadata returned when
