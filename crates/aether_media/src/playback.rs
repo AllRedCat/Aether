@@ -160,6 +160,15 @@ impl LookaheadRingBuffer {
         st.queue.front().map(|f| (f.pts, f.duration_pts))
     }
 
+    /// Non-blocking peek of the front frame `(pts, duration_pts)` plus the PTS of the
+    /// frame queued right behind it (if any). Avoids copying pixel buffers.
+    pub fn peek_front_with_successor(&self) -> Option<(i64, i64, Option<i64>)> {
+        let st = self.state.lock().unwrap();
+        st.queue
+            .front()
+            .map(|f| (f.pts, f.duration_pts, st.queue.get(1).map(|n| n.pts)))
+    }
+
     /// Pops the front frame from the queue, signaling waiting producers.
     pub fn pop_front(&self) -> Option<VideoFrame> {
         let mut st = self.state.lock().unwrap();
@@ -337,29 +346,82 @@ pub enum FrameAction {
 pub struct FrameDropper;
 
 impl FrameDropper {
-    /// Evaluates whether the front frame should be dropped, presented, or waited on.
+    /// Default maximum allowed late frame multiplier before authorizing a frame drop (2x frame duration).
+    pub const DEFAULT_MAX_LATE_MULTIPLIER: i64 = 2;
+
+    /// Evaluates whether the front frame should be dropped, presented, or waited on,
+    /// applying hysteresis tolerance to preserve visual smoothness.
     ///
-    /// # Frame Dropping Rule
-    /// If `master_pts >= front_frame_pts + front_frame_duration`, the presentation window
-    /// of frame N has fully elapsed and the playhead is at frame N+1 or beyond.
-    /// Frame N is dropped without being dispatched to the UI.
+    /// # Hysteresis Rules:
+    /// - **Aguardar (`Wait`):** Se o quadro estiver no futuro (`master_pts < front_frame_pts`),
+    ///   aguarda a diferença respeitando o framerate.
+    /// - **Apresentar Imediatamente (`Present`):** Se o quadro estiver no tempo exato ou
+    ///   ligeiramente atrasado dentro de um limiar tolerável (`delay <= 2 * duration`),
+    ///   o frame é apresentado imediatamente para manter a fluidez visual sem engasgos.
+    /// - **Descarte (`Drop`):** Apenas descarta se o quadro estiver criticamente atrasado
+    ///   por mais de 2x a duração de um frame (`master_pts > front_frame_pts + 2 * duration`),
+    ///   evitando atraso acumulado sob sobrecarga severa.
     #[inline]
     pub fn evaluate(
         front_frame_pts: i64,
         front_frame_duration: i64,
         master_pts: i64,
     ) -> FrameAction {
-        let duration = front_frame_duration.max(1);
-        let frame_expiry = front_frame_pts.saturating_add(duration);
+        Self::evaluate_with_tolerance(
+            front_frame_pts,
+            front_frame_duration,
+            master_pts,
+            Self::DEFAULT_MAX_LATE_MULTIPLIER,
+        )
+    }
 
-        if master_pts >= frame_expiry {
-            FrameAction::Drop
-        } else if master_pts >= front_frame_pts {
-            FrameAction::Present
-        } else {
+    /// Evaluates frame timing with an explicit late frame multiplier.
+    #[inline]
+    pub fn evaluate_with_tolerance(
+        front_frame_pts: i64,
+        front_frame_duration: i64,
+        master_pts: i64,
+        max_late_multiplier: i64,
+    ) -> FrameAction {
+        let duration = front_frame_duration.max(1);
+        let multiplier = max_late_multiplier.max(1);
+        let drop_threshold = front_frame_pts.saturating_add(duration.saturating_mul(multiplier));
+
+        if master_pts < front_frame_pts {
             FrameAction::Wait {
                 pts_ahead: front_frame_pts.saturating_sub(master_pts),
             }
+        } else if master_pts <= drop_threshold {
+            FrameAction::Present
+        } else {
+            FrameAction::Drop
+        }
+    }
+
+    /// Successor-aware evaluation used by the realtime emitter.
+    ///
+    /// A late frame is dropped **only** if the frame queued right behind it is
+    /// itself already due (`master_pts >= next_pts`): skipping is then free, since a
+    /// newer image can be shown immediately. When the late frame is the only one
+    /// available (decoder behind the playhead), it is presented instead of being
+    /// discarded — dropping it would leave the screen frozen on the previous image,
+    /// which is exactly the cascade observed when the decoder cannot keep up.
+    #[inline]
+    pub fn evaluate_with_successor(
+        front_frame_pts: i64,
+        next_frame_pts: Option<i64>,
+        master_pts: i64,
+    ) -> FrameAction {
+        if master_pts < front_frame_pts {
+            return FrameAction::Wait {
+                pts_ahead: front_frame_pts.saturating_sub(master_pts),
+            };
+        }
+        match next_frame_pts {
+            Some(next_pts) if next_pts > front_frame_pts && master_pts >= next_pts => {
+                FrameAction::Drop
+            }
+            _ => FrameAction::Present,
         }
     }
 }
@@ -491,20 +553,70 @@ mod tests {
 
     #[test]
     fn test_frame_dropper_decisions() {
-        // Frame 0: PTS 0, duration 2. Presentation window = [0, 2). Next frame is at PTS 2.
-        // If master clock is at PTS 0 -> Present
-        assert_eq!(FrameDropper::evaluate(0, 2, 0), FrameAction::Present);
-        // If master clock is at PTS 1 -> Present
-        assert_eq!(FrameDropper::evaluate(0, 2, 1), FrameAction::Present);
-        // If master clock is at PTS 2 -> Drop! (playhead reached next frame)
-        assert_eq!(FrameDropper::evaluate(0, 2, 2), FrameAction::Drop);
-        // If master clock is at PTS 5 -> Drop!
-        assert_eq!(FrameDropper::evaluate(0, 2, 5), FrameAction::Drop);
+        // Frame PTS: 10, Duration: 2.
+        // Tolerância padrão: 2x duração -> drop_threshold = 10 + 2 * 2 = 14.
 
-        // If master clock is at PTS -1 -> Wait
+        // 1. No tempo exato (on-time): PTS do relógio coincide ou está no primeiro intervalo do frame
+        assert_eq!(FrameDropper::evaluate(10, 2, 10), FrameAction::Present);
+        assert_eq!(FrameDropper::evaluate(10, 2, 11), FrameAction::Present);
+
+        // 2. Ligeiramente atrasado (dentro da histerese tolerada: <= 2 * duration):
+        // 1 frame de atraso (master_pts = 12) e 2 frames de atraso (master_pts = 14) são apresentados
+        // imediatamente para preservar fluidez visual sem engasgos ou quedas em cascata.
+        assert_eq!(FrameDropper::evaluate(10, 2, 12), FrameAction::Present);
+        assert_eq!(FrameDropper::evaluate(10, 2, 13), FrameAction::Present);
+        assert_eq!(FrameDropper::evaluate(10, 2, 14), FrameAction::Present);
+
+        // 3. Criticamente atrasado (> 2 frames de atraso):
+        // Quando o atraso ultrapassa 2x a duração do frame (master_pts >= 15), descarta o frame
+        // para recuperar a sincronia e evitar acúmulo de latência.
+        assert_eq!(FrameDropper::evaluate(10, 2, 15), FrameAction::Drop);
+        assert_eq!(FrameDropper::evaluate(10, 2, 25), FrameAction::Drop);
+
+        // 4. Adiantado (no futuro em relação ao relógio mestre):
+        // Quando master_pts < front_frame_pts, aguarda até o tempo do quadro.
         assert_eq!(
-            FrameDropper::evaluate(10, 2, 5),
-            FrameAction::Wait { pts_ahead: 5 }
+            FrameDropper::evaluate(10, 2, 7),
+            FrameAction::Wait { pts_ahead: 3 }
+        );
+
+        // Teste explícito com tolerância customizada (ex: multiplicador 1)
+        assert_eq!(
+            FrameDropper::evaluate_with_tolerance(10, 2, 12, 1),
+            FrameAction::Present
+        );
+        assert_eq!(
+            FrameDropper::evaluate_with_tolerance(10, 2, 13, 1),
+            FrameAction::Drop
+        );
+    }
+
+    #[test]
+    fn test_frame_dropper_never_starves_display() {
+        // Ahead -> Wait
+        assert_eq!(
+            FrameDropper::evaluate_with_successor(10, Some(12), 7),
+            FrameAction::Wait { pts_ahead: 3 }
+        );
+        // On time -> Present
+        assert_eq!(
+            FrameDropper::evaluate_with_successor(10, Some(12), 10),
+            FrameAction::Present
+        );
+        // Late but successor not due yet -> Present
+        assert_eq!(
+            FrameDropper::evaluate_with_successor(10, Some(12), 11),
+            FrameAction::Present
+        );
+        // Successor already due -> Drop current (newer image is available)
+        assert_eq!(
+            FrameDropper::evaluate_with_successor(10, Some(12), 12),
+            FrameAction::Drop
+        );
+        // Critically late but it is the only decoded frame -> must Present, never freeze
+        assert_eq!(
+            FrameDropper::evaluate_with_successor(2, None, 271),
+            FrameAction::Present
         );
     }
 }

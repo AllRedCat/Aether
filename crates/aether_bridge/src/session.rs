@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aether_core::media::MediaType;
 use aether_core::timeline::Rational;
@@ -177,7 +177,6 @@ impl PlaybackSession {
     fn spawn_decoder_worker(self: &Arc<Self>) {
         let decoder_arc = Arc::clone(&self.decoder);
         let buffer_arc = Arc::clone(&self.lookahead_buffer);
-        let clock_arc = Arc::clone(&self.master_clock);
         let shutdown = Arc::clone(&self.worker_shutdown);
         let session_id = self.session_id.clone();
 
@@ -210,17 +209,12 @@ impl PlaybackSession {
 
                     if dec_guard.video().is_some() {
                         let decode_res = dec_guard.next_video_frame();
-                        // Also decode audio chunk to advance master audio clock if present
-                        if dec_guard.audio().is_some() {
-                            if let Ok(Some(ab)) = dec_guard.next_audio_buffer() {
-                                clock_arc.update_audio_pts(ab.pts);
-                            }
-                        }
                         // Drop lock immediately before RGBA conversion and buffer wait!
                         drop(dec_guard);
 
                         match decode_res {
                             Ok(Some(mut vf)) => {
+                                eprintln!("[DEBUG DEC] Quadro decodificado com sucesso! PTS: {}", vf.pts);
                                 vf.ensure_rgba8();
                                 let _ = buffer_arc.push_wait(
                                     vf,
@@ -229,31 +223,18 @@ impl PlaybackSession {
                                 );
                             }
                             Ok(None) => {
+                                eprintln!("[DEBUG DEC] Fim natural do fluxo (None)");
                                 buffer_arc.set_eos(epoch, true);
                             }
-                            Err(_) => {
-                                buffer_arc.set_eos(epoch, true);
-                            }
-                        }
-                    } else if dec_guard.audio().is_some() {
-                        let audio_res = dec_guard.next_audio_buffer();
-                        drop(dec_guard);
-
-                        match audio_res {
-                            Ok(Some(ab)) => {
-                                clock_arc.update_audio_pts(ab.pts);
-                                thread::sleep(Duration::from_millis(10));
-                            }
-                            Ok(None) => {
-                                buffer_arc.set_eos(epoch, true);
-                            }
-                            Err(_) => {
+                            Err(e) => {
+                                eprintln!("[DEBUG DEC] ERRO DE DECODIFICAÇÃO: {:?}", e);
                                 buffer_arc.set_eos(epoch, true);
                             }
                         }
                     } else {
                         drop(dec_guard);
                         buffer_arc.set_eos(epoch, true);
+                        thread::sleep(Duration::from_millis(20));
                     }
                 }
             });
@@ -270,11 +251,13 @@ impl PlaybackSession {
         let shutdown = Arc::clone(&self.worker_shutdown);
         let session_id = self.session_id.clone();
         let duration_pts = self.duration_pts;
-        let fps = if self.fps > 0.0 { self.fps } else { 60.0 };
+        let clock_fps = self.master_clock.fps().max(1.0);
 
         let _ = thread::Builder::new()
             .name(format!("aether-emit-{}", session_id))
             .spawn(move || {
+                let mut last_state_broadcast = Instant::now();
+
                 while !shutdown.load(Ordering::SeqCst) {
                     if !is_playing.load(Ordering::SeqCst) {
                         thread::sleep(Duration::from_millis(4));
@@ -299,22 +282,33 @@ impl PlaybackSession {
 
                     if session.media_type == MediaType::Audio {
                         current_pts.store(master_pts, Ordering::SeqCst);
-                        session.broadcast_state();
+                        if last_state_broadcast.elapsed() >= Duration::from_millis(50) {
+                            session.broadcast_state();
+                            last_state_broadcast = Instant::now();
+                        }
                         thread::sleep(Duration::from_millis(15));
                         continue;
                     }
 
-                    match buffer_arc.peek_pts_and_duration() {
-                        Some((frame_pts, frame_dur)) => {
-                            match FrameDropper::evaluate(frame_pts, frame_dur, master_pts) {
+                    match buffer_arc.peek_front_with_successor() {
+                        Some((frame_pts, frame_dur, next_pts)) => {
+                            match FrameDropper::evaluate_with_successor(frame_pts, next_pts, master_pts) {
                                 FrameAction::Drop => {
-                                    // Late frame: drop immediately to prevent cumulative A/V drift!
+                                    eprintln!(
+                                        "[DEBUG EMIT] Frame DESCARTADO! frame_pts: {}, next_pts: {:?}, master_pts: {}",
+                                        frame_pts, next_pts, master_pts
+                                    );
+                                    // A newer frame is already due: skip this one without starving the display.
                                     buffer_arc.drop_front();
                                     continue;
                                 }
                                 FrameAction::Present => {
+                                    let present_start = Instant::now();
+                                    eprintln!("[DEBUG EMIT] Frame APRESENTADO! PTS: {}, master_pts: {}", frame_pts, master_pts);
                                     if let Some(vf) = buffer_arc.pop_front() {
                                         current_pts.store(vf.pts, Ordering::SeqCst);
+                                        clock_arc.seek(vf.pts);
+
                                         let timestamp_seconds = vf.timestamp_seconds();
                                         let bf = BridgeFrame {
                                             width: vf.width,
@@ -325,16 +319,28 @@ impl PlaybackSession {
                                             row_stride_bytes: vf.row_stride_bytes,
                                             timestamp_seconds,
                                         };
-                                        if let Ok(mut last) = session.last_frame.lock() {
-                                            *last = Some(bf.clone());
-                                        }
                                         session.broadcast_frame(&bf);
-                                        session.broadcast_state();
+
+                                        // Throttled state broadcast (reduces Riverpod rebuilds in Flutter)
+                                        if last_state_broadcast.elapsed() >= Duration::from_millis(100) {
+                                            session.broadcast_state();
+                                            last_state_broadcast = Instant::now();
+                                        }
+
+                                        if let Ok(mut last) = session.last_frame.lock() {
+                                            *last = Some(bf);
+                                        }
+
+                                        // Cadence pacing: keep frame visible on screen for its nominal duration
+                                        let frame_dur_secs = (frame_dur.max(1) as f64 / clock_fps).clamp(0.005, 0.2);
+                                        let elapsed = present_start.elapsed();
+                                        if let Some(remaining) = Duration::from_secs_f64(frame_dur_secs).checked_sub(elapsed) {
+                                            thread::sleep(remaining);
+                                        }
                                     }
-                                    thread::sleep(Duration::from_millis(4));
                                 }
                                 FrameAction::Wait { pts_ahead } => {
-                                    let sleep_secs = (pts_ahead as f64 / fps).clamp(0.001, 0.016);
+                                    let sleep_secs = (pts_ahead as f64 / clock_fps).clamp(0.001, 0.05);
                                     thread::sleep(Duration::from_secs_f64(sleep_secs));
                                 }
                             }
@@ -570,32 +576,57 @@ impl SessionRegistry {
 
         let width = meta.width.unwrap_or(0);
         let height = meta.height.unwrap_or(0);
-        let fps = if let Some(v) = decoder.video() {
+
+        let (timebase, duration_pts, valid_fps, duration_seconds) = if let Some(v) = decoder.video() {
+            let tb = v.timebase();
             let v_fps = v.fps();
-            if v_fps > 0.0 {
+            let fps = if v_fps > 0.0 {
                 v_fps
+            } else if tb.den != 0 && tb.num > 0 {
+                tb.num as f64 / tb.den as f64
             } else {
                 meta.fps().unwrap_or(60.0)
-            }
-        } else {
-            meta.fps().unwrap_or(60.0)
-        };
-        let valid_fps = if fps > 0.0 { fps } else { 60.0 };
-        let duration_pts = if meta.duration_pts > 0 {
-            meta.duration_pts
-        } else {
-            1
-        };
-        let timebase = meta.timebase.unwrap_or(Rational { num: 60, den: 1 });
-        let duration_seconds = if meta.duration_seconds > 0.0 {
-            meta.duration_seconds
-        } else {
-            let timeline_fps = if timebase.den != 0 && timebase.num > 0 {
-                timebase.num as f64 / timebase.den as f64
-            } else {
-                valid_fps
             };
-            duration_pts as f64 / timeline_fps
+            let dur_pts = if v.duration_pts() > 0 {
+                v.duration_pts()
+            } else if meta.duration_pts > 0 {
+                meta.duration_pts
+            } else {
+                1
+            };
+            let dur_sec = if v.duration_seconds() > 0.0 {
+                v.duration_seconds()
+            } else if meta.duration_seconds > 0.0 {
+                meta.duration_seconds
+            } else {
+                let timeline_fps = if tb.den != 0 && tb.num > 0 {
+                    tb.num as f64 / tb.den as f64
+                } else {
+                    fps
+                };
+                dur_pts as f64 / timeline_fps
+            };
+            (tb, dur_pts, fps, dur_sec)
+        } else if let Some(a) = decoder.audio() {
+            let tb = a.timebase();
+            let fps = meta.fps().unwrap_or(60.0);
+            let dur_pts = if a.duration_pts() > 0 {
+                a.duration_pts()
+            } else {
+                meta.duration_pts.max(1)
+            };
+            let dur_sec = if a.duration_seconds() > 0.0 {
+                a.duration_seconds()
+            } else {
+                meta.duration_seconds
+            };
+            (tb, dur_pts, fps, dur_sec)
+        } else {
+            let tb = meta.timebase.unwrap_or(Rational { num: 60, den: 1 });
+            let fps = meta.fps().unwrap_or(60.0);
+            let dur_pts = meta.duration_pts.max(1);
+            let dur_sec = meta.duration_seconds;
+            (tb, dur_pts, fps, dur_sec)
         };
 
         let session_id = uuid::Uuid::new_v4().to_string();

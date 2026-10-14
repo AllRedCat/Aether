@@ -64,3 +64,5 @@ target/
 # mas se quiser ignorar logs:
 *.log
 .agents/
+__pycache__/
+*.pyc

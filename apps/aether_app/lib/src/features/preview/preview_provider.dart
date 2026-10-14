@@ -66,8 +66,7 @@ class PreviewState {
   }
 
   /// Whether a valid session exists and is ready for display.
-  bool get isLoaded =>
-      session != null && !isLoading && errorMessage == null;
+  bool get isLoaded => session != null && !isLoading && errorMessage == null;
 
   /// Whether media is currently selected/associated.
   bool get hasMedia => currentMedia != null || session != null;
@@ -101,9 +100,7 @@ class PreviewState {
       durationSeconds: durationSeconds ?? this.durationSeconds,
       isLoading: isLoading ?? this.isLoading,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
-      textureId: clearTextureId
-          ? null
-          : (textureId ?? _customTextureId),
+      textureId: clearTextureId ? null : (textureId ?? _customTextureId),
     );
   }
 
@@ -222,9 +219,8 @@ class PreviewNotifier extends StateNotifier<PreviewState> {
 
   void _subscribeToSessionStreams(String sessionId) {
     _frameSub?.cancel();
-    _frameSub = _bridgeService
-        .subscribePreviewFrames(sessionId: sessionId)
-        .listen(
+    _frameSub =
+        _bridgeService.subscribePreviewFrames(sessionId: sessionId).listen(
       (frame) {
         if (!mounted) return;
         state = state.copyWith(
@@ -239,18 +235,16 @@ class PreviewNotifier extends StateNotifier<PreviewState> {
     );
 
     _playbackSub?.cancel();
-    _playbackSub = _bridgeService
-        .subscribePlaybackState(sessionId: sessionId)
-        .listen(
+    _playbackSub =
+        _bridgeService.subscribePlaybackState(sessionId: sessionId).listen(
       (pbState) {
         if (!mounted) return;
         state = state.copyWith(
           isPlaying: pbState.isPlaying,
           currentPts: pbState.currentPts,
           currentSeconds: pbState.currentSeconds,
-          durationPts: pbState.durationPts > 0
-              ? pbState.durationPts
-              : state.durationPts,
+          durationPts:
+              pbState.durationPts > 0 ? pbState.durationPts : state.durationPts,
           durationSeconds: pbState.durationSeconds > 0
               ? pbState.durationSeconds
               : state.durationSeconds,
@@ -265,12 +259,20 @@ class PreviewNotifier extends StateNotifier<PreviewState> {
   /// Starts playback.
   Future<void> play() async {
     final sessionId = state.session?.sessionId;
-    if (sessionId == null) return;
+    debugPrint('[DEBUG UI] play() chamado. sessionId: $sessionId');
+
+    if (sessionId == null) {
+      debugPrint('[DEBUG UI] ABORTADO: sessinoId é nulo!');
+      return;
+    }
 
     try {
+      debugPrint('[DEBUG UI] Chamando _bridgeService.previewPlay($sessionId)...');
       await _bridgeService.previewPlay(sessionId: sessionId);
+      debugPrint('[DEBUG UI] _bridgeService.previewPlay respondeu com sucesso!');
       state = state.copyWith(isPlaying: true);
     } catch (e) {
+      debugPrint('[DEBUG UI] ERRO ao chamar previewPlay: $e');
       state = state.copyWith(errorMessage: 'Erro ao iniciar reprodução: $e');
     }
   }
