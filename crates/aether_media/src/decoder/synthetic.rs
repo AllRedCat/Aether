@@ -154,9 +154,12 @@ impl SyntheticVideoDecoder {
         ))
     }
 
-    fn generate_frame_at(&self, frame_idx: i64) -> VideoFrame {
-        let pixel_count = (self.width * self.height) as usize;
-        let mut data = vec![0u8; pixel_count * 4];
+
+    fn generate_frame_at_into(&self, frame_idx: i64, data: &mut Vec<u8>) -> VideoFrame {
+        let total_bytes = (self.width * self.height * 4) as usize;
+        if data.len() != total_bytes {
+            data.resize(total_bytes, 0);
+        }
 
         match self.pattern {
             SyntheticPattern::ColorCycle => {
@@ -230,7 +233,7 @@ impl SyntheticVideoDecoder {
             width: self.width,
             height: self.height,
             format: PixelFormat::Rgba8,
-            data,
+            data: std::mem::take(data),
             row_stride_bytes: self.width * 4,
             pts,
             duration_pts: self.pts_per_frame,
@@ -270,10 +273,14 @@ impl VideoDecoder for SyntheticVideoDecoder {
     }
 
     fn next_frame(&mut self) -> DecoderResult<Option<VideoFrame>> {
+        self.next_frame_with_buffer(Vec::new())
+    }
+
+    fn next_frame_with_buffer(&mut self, mut buffer: Vec<u8>) -> DecoderResult<Option<VideoFrame>> {
         if self.current_frame >= self.total_frames as i64 {
             return Ok(None);
         }
-        let frame = self.generate_frame_at(self.current_frame);
+        let frame = self.generate_frame_at_into(self.current_frame, &mut buffer);
         self.current_frame += 1;
         Ok(Some(frame))
     }

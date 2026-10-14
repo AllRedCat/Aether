@@ -170,6 +170,10 @@ mod native {
         }
 
         fn next_frame(&mut self) -> DecoderResult<Option<VideoFrame>> {
+            self.next_frame_with_buffer(Vec::new())
+        }
+
+        fn next_frame_with_buffer(&mut self, mut buffer: Vec<u8>) -> DecoderResult<Option<VideoFrame>> {
             let mut raw = std::mem::MaybeUninit::<AvfRawFrame>::uninit();
             let res = unsafe { avf_decoder_next_frame(self.handle, raw.as_mut_ptr()) };
 
@@ -179,9 +183,13 @@ mod native {
                     let mut raw = unsafe { raw.assume_init() };
                     let data = unsafe {
                         let slice = std::slice::from_raw_parts(raw.data, raw.data_len);
-                        let vec = slice.to_vec();
+                        buffer.clear();
+                        if buffer.capacity() < raw.data_len {
+                            buffer.reserve(raw.data_len - buffer.capacity());
+                        }
+                        buffer.extend_from_slice(slice);
                         avf_decoder_free_frame(&mut raw);
-                        vec
+                        buffer
                     };
 
                     let fps_ratio = if self.timebase.den != 0 && self.timebase.num > 0 {

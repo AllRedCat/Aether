@@ -32,7 +32,15 @@ pub trait VideoDecoder: Send + Sync {
     ///
     /// Returns `Ok(Some(frame))` when a frame is decoded.
     /// Returns `Ok(None)` when the end of stream (EOS) is reached.
-    fn next_frame(&mut self) -> DecoderResult<Option<VideoFrame>>;
+    fn next_frame(&mut self) -> DecoderResult<Option<VideoFrame>> {
+        self.next_frame_with_buffer(Vec::new())
+    }
+
+    /// Decodes the next sequential frame reusing a pre-allocated pixel buffer.
+    fn next_frame_with_buffer(&mut self, buffer: Vec<u8>) -> DecoderResult<Option<VideoFrame>> {
+        let _ = buffer;
+        self.next_frame()
+    }
 
     /// Seeks the video stream to the target presentation timestamp (random access).
     fn seek_pts(&mut self, target_pts: i64) -> DecoderResult<()>;
@@ -143,8 +151,13 @@ pub trait MediaDecoder: Send + Sync {
 
     /// Convenience method to decode the next video frame.
     fn next_video_frame(&mut self) -> DecoderResult<Option<VideoFrame>> {
+        self.next_video_frame_with_buffer(Vec::new())
+    }
+
+    /// Convenience method to decode the next video frame reusing a pre-allocated pixel buffer.
+    fn next_video_frame_with_buffer(&mut self, buffer: Vec<u8>) -> DecoderResult<Option<VideoFrame>> {
         match self.video() {
-            Some(v) => v.next_frame(),
+            Some(v) => v.next_frame_with_buffer(buffer),
             None => Err(DecoderError::NoVideoStream),
         }
     }

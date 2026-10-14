@@ -116,15 +116,25 @@ impl VideoDecoder for ImageSequenceDecoder {
     }
 
     fn next_frame(&mut self) -> DecoderResult<Option<VideoFrame>> {
+        self.next_frame_with_buffer(Vec::new())
+    }
+
+    fn next_frame_with_buffer(&mut self, mut buffer: Vec<u8>) -> DecoderResult<Option<VideoFrame>> {
         if self.current_pts >= self.duration_pts {
             return Ok(None);
         }
+
+        buffer.clear();
+        if buffer.capacity() < self.cached_rgba.len() {
+            buffer.reserve(self.cached_rgba.len() - buffer.capacity());
+        }
+        buffer.extend_from_slice(&self.cached_rgba);
 
         let frame = VideoFrame {
             width: self.width,
             height: self.height,
             format: PixelFormat::Rgba8,
-            data: self.cached_rgba.clone(),
+            data: buffer,
             row_stride_bytes: self.width * 4,
             pts: self.current_pts,
             duration_pts: self.duration_pts,

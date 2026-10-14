@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -858,3 +859,150 @@ fn test_preroll_during_active_playback_scrub() {
     preview_pause(info.session_id.clone()).expect("Pause");
     close_preview_session(info.session_id).expect("Close session");
 }
+
+// =========================================================================
+// 9. Zero-Allocation Lookahead Ring Buffer & Concurrency Tests (Tarefa 4)
+// =========================================================================
+
+#[test]
+fn test_zero_allocation_decoding_loop_continuous_playback() {
+    let uri = "synthetic://zero_alloc_loop?width=64&height=64&fps=30&duration=10.0";
+    let info = create_preview_session(uri.to_string()).expect("Create session for zero-alloc test");
+    let session = SessionRegistry::global()
+        .get_session(&info.session_id)
+        .expect("Retrieve session from registry");
+
+    let pool = session.buffer_pool();
+    let initial_alloc_count = pool.alloc_count();
+    let default_cap = pool.default_capacity();
+    let expected_frame_bytes = 64 * 64 * 4;
+
+    assert_eq!(default_cap, expected_frame_bytes);
+    assert!(
+        initial_alloc_count > 0,
+        "Buffer pool must be pre-warmed on session creation"
+    );
+
+    // Initial pre-fill may consume a few buffers into the lookahead ring buffer
+    eprintln!(
+        "[TEST LOG] Pool initialized: alloc_count={}, free_count={}, default_cap={}",
+        initial_alloc_count,
+        pool.free_count(),
+        default_cap
+    );
+
+    // Start continuous playback
+    preview_play(info.session_id.clone()).expect("Start linear playback");
+
+    // Let playback run for 700ms (~21 frames)
+    thread::sleep(Duration::from_millis(700));
+
+    let seq_count = session.sequential_frame_count();
+    assert!(
+        seq_count >= 15,
+        "Expected at least 15 sequential frames decoded, got {}",
+        seq_count
+    );
+
+    // CRITICAL REQUIREMENT (Tarefa 4):
+    // Zero new Vec<u8> allocations after pool warm-up!
+    let alloc_after_playback = pool.alloc_count();
+    assert_eq!(
+        alloc_after_playback, initial_alloc_count,
+        "Zero-allocation loop violated! Expected alloc_count to stay {}, but it grew to {}",
+        initial_alloc_count, alloc_after_playback
+    );
+
+    // Verify buffer recycling occurred continuously
+    let recycle_count = pool.recycle_count();
+    assert!(
+        recycle_count > 0,
+        "Buffer recycling must be active, got recycle_count = {}",
+        recycle_count
+    );
+
+    eprintln!(
+        "[TEST LOG] Playback completed: seq_frames={}, alloc_count={} (unchanged), recycle_count={}",
+        seq_count, alloc_after_playback, recycle_count
+    );
+
+    preview_pause(info.session_id.clone()).expect("Pause");
+    close_preview_session(info.session_id).expect("Close session");
+}
+
+#[test]
+fn test_rapid_seek_and_play_concurrency_no_deadlock() {
+    let uri = "synthetic://rapid_scrub_concurrency?width=64&height=64&fps=60&duration=30.0";
+    let info = create_preview_session(uri.to_string()).expect("Create session");
+    let _session = SessionRegistry::global()
+        .get_session(&info.session_id)
+        .expect("Retrieve session");
+
+    let running = Arc::new(AtomicBool::new(true));
+
+    // Worker 1: Rapid scrubbing across timeline
+    let sid_scrub = info.session_id.clone();
+    let run_scrub = Arc::clone(&running);
+    let scrub_handle = thread::spawn(move || {
+        let mut target = 0;
+        let mut count = 0;
+        while run_scrub.load(Ordering::Relaxed) {
+            target = (target + 17) % 600;
+            let _ = preview_seek_pts(sid_scrub.clone(), target);
+            count += 1;
+            thread::sleep(Duration::from_millis(5));
+        }
+        count
+    });
+
+    // Worker 2: Rapid play / pause toggling
+    let sid_play = info.session_id.clone();
+    let run_play = Arc::clone(&running);
+    let play_handle = thread::spawn(move || {
+        let mut toggles = 0;
+        while run_play.load(Ordering::Relaxed) {
+            let _ = preview_play(sid_play.clone());
+            thread::sleep(Duration::from_millis(15));
+            let _ = preview_pause(sid_play.clone());
+            thread::sleep(Duration::from_millis(10));
+            toggles += 1;
+        }
+        toggles
+    });
+
+    // Worker 3: Concurrent lock-free status polling
+    let sid_status = info.session_id.clone();
+    let run_status = Arc::clone(&running);
+    let status_handle = thread::spawn(move || {
+        let mut reads = 0;
+        while run_status.load(Ordering::Relaxed) {
+            let _ = get_preview_state(sid_status.clone());
+            reads += 1;
+            thread::sleep(Duration::from_millis(2));
+        }
+        reads
+    });
+
+    // Run concurrent operations for 600ms
+    thread::sleep(Duration::from_millis(600));
+    running.store(false, Ordering::Relaxed);
+
+    let scrubs = scrub_handle.join().expect("Scrub thread must not deadlock");
+    let toggles = play_handle.join().expect("Play thread must not deadlock");
+    let reads = status_handle.join().expect("Status thread must not deadlock");
+
+    eprintln!(
+        "[TEST LOG] Concurrency stress test passed: scrubs={}, toggles={}, status_reads={}",
+        scrubs, toggles, reads
+    );
+    assert!(scrubs > 5);
+    assert!(toggles > 5);
+    assert!(reads > 10);
+
+    // Verify session is still responsive and shuts down cleanly
+    let final_state = get_preview_state(info.session_id.clone()).expect("Final state");
+    assert!(final_state.duration_pts > 0);
+
+    close_preview_session(info.session_id).expect("Clean session close");
+}
+

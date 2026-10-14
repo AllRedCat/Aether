@@ -161,6 +161,11 @@ impl PlaybackSession {
         self.lookahead_buffer.dropped_frames()
     }
 
+    /// Access the reusable memory buffer pool backing the lookahead ring buffer.
+    pub fn buffer_pool(&self) -> &Arc<aether_media::playback::FrameBufferPool> {
+        self.lookahead_buffer.pool()
+    }
+
     /// Subscribes a new StreamSink for video frames.
     /// Emits the cached initial/last frame immediately so the UI is responsive.
     pub fn subscribe_frames(&self, sink: StreamSink<BridgeFrame>) {
@@ -333,6 +338,7 @@ impl PlaybackSession {
         let session_weak = Arc::downgrade(self);
         let session_id = self.session_id.clone();
         let duration_pts = self.duration_pts;
+        let frame_bytes = (self.width * self.height * 4) as usize;
 
         let _ = thread::Builder::new()
             .name(format!("aether-dec-{}", session_id))
@@ -406,50 +412,61 @@ impl PlaybackSession {
                         // Advance discarding intermediate frames until target_pts
                         let mut target_frame = None;
                         if dec.video().is_some() {
-                            while let Ok(Some(mut vf)) = dec.next_video_frame() {
-                                // While advancing, check if a newer seek request arrived (coalesce/debounce)!
-                                let has_newer = {
-                                    let mut ctrl = control_arc.lock().unwrap();
-                                    if let Some(mut newer) = ctrl.pending_seek.take() {
-                                        seek_req.responders.append(&mut newer.responders);
-                                        target_pts = newer.target_pts.clamp(0, duration_pts);
-                                        ctrl.state = DecoderState::Seeking(target_pts);
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                };
+                            loop {
+                                let pooled_buf = buffer_arc.acquire_buffer(frame_bytes);
+                                let frame_res = dec.next_video_frame_with_buffer(pooled_buf);
+                                match frame_res {
+                                    Ok(Some(mut vf)) => {
+                                        // While advancing, check if a newer seek request arrived (coalesce/debounce)!
+                                        let has_newer = {
+                                            let mut ctrl = control_arc.lock().unwrap();
+                                            if let Some(mut newer) = ctrl.pending_seek.take() {
+                                                seek_req.responders.append(&mut newer.responders);
+                                                target_pts = newer.target_pts.clamp(0, duration_pts);
+                                                ctrl.state = DecoderState::Seeking(target_pts);
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        };
 
-                                if has_newer {
-                                    let newer_kf = if let Some(ref m_idx) = mmap_fidx {
-                                        m_idx.seek_keyframe(target_pts).map(|kf| kf.pts).unwrap_or(target_pts)
-                                    } else if let Some(ref idx) = fidx {
-                                        idx.seek_keyframe(target_pts).map(|kf| kf.pts).unwrap_or(target_pts)
-                                    } else {
-                                        target_pts
-                                    };
-                                    if newer_kf != keyframe_pts {
-                                        let seeks = seek_count.fetch_add(1, Ordering::SeqCst) + 1;
-                                        eprintln!(
-                                            "[DEBUG DEC] [Seeking Coalesced] Seek to newer keyframe_pts={} (total_seeks={})",
-                                            newer_kf, seeks
-                                        );
-                                        let _ = dec.seek_pts(newer_kf);
-                                    }
-                                    continue;
-                                }
+                                        if has_newer {
+                                            buffer_arc.recycle_buffer(vf.data);
+                                            let newer_kf = if let Some(ref m_idx) = mmap_fidx {
+                                                m_idx.seek_keyframe(target_pts).map(|kf| kf.pts).unwrap_or(target_pts)
+                                            } else if let Some(ref idx) = fidx {
+                                                idx.seek_keyframe(target_pts).map(|kf| kf.pts).unwrap_or(target_pts)
+                                            } else {
+                                                target_pts
+                                            };
+                                            if newer_kf != keyframe_pts {
+                                                let seeks = seek_count.fetch_add(1, Ordering::SeqCst) + 1;
+                                                eprintln!(
+                                                    "[DEBUG DEC] [Seeking Coalesced] Seek to newer keyframe_pts={} (total_seeks={})",
+                                                    newer_kf, seeks
+                                                );
+                                                let _ = dec.seek_pts(newer_kf);
+                                            }
+                                            continue;
+                                        }
 
-                                let pts = vf.pts;
-                                vf.ensure_rgba8();
-                                target_frame = Some(vf);
-                                if pts >= target_pts {
-                                    break;
+                                        let pts = vf.pts;
+                                        vf.ensure_rgba8();
+                                        if let Some(old_vf) = target_frame.replace(vf) {
+                                            buffer_arc.recycle_buffer(old_vf.data);
+                                        }
+                                        if pts >= target_pts {
+                                            break;
+                                        }
+                                    }
+                                    _ => break,
                                 }
                             }
 
                             if target_frame.is_none() && keyframe_pts != target_pts {
                                 let _ = dec.seek_pts(target_pts);
-                                if let Ok(Some(mut vf)) = dec.next_video_frame() {
+                                let pooled_buf = buffer_arc.acquire_buffer(frame_bytes);
+                                if let Ok(Some(mut vf)) = dec.next_video_frame_with_buffer(pooled_buf) {
                                     vf.ensure_rgba8();
                                     target_frame = Some(vf);
                                 }
@@ -474,7 +491,10 @@ impl PlaybackSession {
                             };
                             if let Some(session) = session_weak.upgrade() {
                                 if let Ok(mut last) = session.last_frame.lock() {
-                                    *last = Some(bf.clone());
+                                    let old_last = last.replace(bf.clone());
+                                    if let Some(old) = old_last {
+                                        buffer_arc.recycle_buffer(old.rgba_bytes);
+                                    }
                                 }
                                 session.broadcast_frame(&bf);
                                 session.broadcast_state();
@@ -535,7 +555,8 @@ impl PlaybackSession {
                         }
 
                         if dec.video().is_some() {
-                            let decode_res = dec.next_video_frame();
+                            let pooled_buf = buffer_arc.acquire_buffer(frame_bytes);
+                            let decode_res = dec.next_video_frame_with_buffer(pooled_buf);
                             drop(dec);
 
                             match decode_res {
@@ -589,7 +610,8 @@ impl PlaybackSession {
                             continue;
                         }
                         if dec.video().is_some() {
-                            let decode_res = dec.next_video_frame();
+                            let pooled_buf = buffer_arc.acquire_buffer(frame_bytes);
+                            let decode_res = dec.next_video_frame_with_buffer(pooled_buf);
                             drop(dec);
                             if let Ok(Some(mut vf)) = decode_res {
                                 let seq = seq_count.fetch_add(1, Ordering::SeqCst) + 1;
@@ -779,7 +801,10 @@ impl PlaybackSession {
                                         }
 
                                         if let Ok(mut last) = session.last_frame.lock() {
-                                            *last = Some(bf);
+                                            let old_frame = last.replace(bf);
+                                            if let Some(old) = old_frame {
+                                                buffer_arc.recycle_buffer(old.rgba_bytes);
+                                            }
                                         }
 
                                         // Cadence pacing: keep frame visible on screen for its nominal duration
@@ -1178,7 +1203,15 @@ impl SessionRegistry {
             (None, None)
         };
 
-        let lookahead_buffer = Arc::new(LookaheadRingBuffer::new(DEFAULT_LOOKAHEAD_CAPACITY));
+        let frame_bytes = (actual_width * actual_height * 4) as usize;
+        let buffer_pool = Arc::new(aether_media::playback::FrameBufferPool::new(
+            DEFAULT_LOOKAHEAD_CAPACITY * 2,
+            frame_bytes,
+        ));
+        let lookahead_buffer = Arc::new(LookaheadRingBuffer::with_pool(
+            DEFAULT_LOOKAHEAD_CAPACITY,
+            buffer_pool,
+        ));
         let master_clock = Arc::new(MasterClock::new(timebase));
         let seek_count = Arc::new(AtomicUsize::new(if initial_frame.is_some() { 1 } else { 0 }));
         let sequential_frame_count = Arc::new(AtomicUsize::new(0));

@@ -1,9 +1,8 @@
 //! Lookahead Ring Buffer, Audio Master Clock (A/V Sync), and Frame Dropper
 //! for high-performance preview player playback.
 
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Condvar, LazyLock, Mutex};
+use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use aether_core::timeline::Rational;
@@ -33,38 +32,184 @@ pub enum BufferError {
     Timeout,
 }
 
-/// Thread-safe bounded ring buffer holding decoded lookahead video frames.
-pub struct LookaheadRingBuffer {
-    capacity: usize,
-    state: Mutex<RingBufferState>,
-    not_full: Condvar,
-    not_empty: Condvar,
+/// Pre-allocated reusable byte buffer pool for decoded video frames.
+/// Eliminates dynamic memory allocations in the playback rendering loop.
+#[derive(Debug)]
+pub struct FrameBufferPool {
+    free_list: Mutex<Vec<Vec<u8>>>,
+    max_buffers: usize,
+    default_capacity: AtomicUsize,
+    alloc_count: AtomicUsize,
+    recycle_count: AtomicUsize,
 }
 
-struct RingBufferState {
-    queue: VecDeque<VideoFrame>,
-    epoch: u64,
-    closed: bool,
-    eos_reached: bool,
-    dropped_frames: u64,
+impl FrameBufferPool {
+    /// Creates a new `FrameBufferPool` with the specified maximum pool size and default buffer capacity.
+    pub fn new(max_buffers: usize, default_capacity: usize) -> Self {
+        let max_b = max_buffers.max(4);
+        let mut initial = Vec::with_capacity(max_b);
+        if default_capacity > 0 {
+            for _ in 0..max_b {
+                initial.push(Vec::with_capacity(default_capacity));
+            }
+        }
+        let initial_allocs = initial.len();
+        Self {
+            free_list: Mutex::new(initial),
+            max_buffers: max_b,
+            default_capacity: AtomicUsize::new(default_capacity),
+            alloc_count: AtomicUsize::new(initial_allocs),
+            recycle_count: AtomicUsize::new(0),
+        }
+    }
+
+    /// Acquires a byte buffer from the free list, or allocates a new one if empty.
+    pub fn acquire(&self, required_bytes: usize) -> Vec<u8> {
+        let mut list = self.free_list.lock().unwrap();
+        if let Some(mut buf) = list.pop() {
+            if buf.capacity() < required_bytes {
+                buf.reserve(required_bytes - buf.capacity());
+                self.alloc_count.fetch_add(1, Ordering::Relaxed);
+            }
+            buf
+        } else {
+            self.alloc_count.fetch_add(1, Ordering::Relaxed);
+            Vec::with_capacity(required_bytes)
+        }
+    }
+
+    /// Recycles a byte buffer back to the free list for subsequent reuse.
+    pub fn recycle(&self, mut buffer: Vec<u8>) {
+        buffer.clear();
+        let mut list = self.free_list.lock().unwrap();
+        if list.len() < self.max_buffers {
+            list.push(buffer);
+            self.recycle_count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Number of free buffers currently available in the pool.
+    pub fn free_count(&self) -> usize {
+        self.free_list.lock().unwrap().len()
+    }
+
+    /// Total number of heap allocations performed by this pool.
+    pub fn alloc_count(&self) -> usize {
+        self.alloc_count.load(Ordering::Relaxed)
+    }
+
+    /// Total number of buffer recycle operations performed.
+    pub fn recycle_count(&self) -> usize {
+        self.recycle_count.load(Ordering::Relaxed)
+    }
+
+    /// Default buffer capacity in bytes configured for this pool.
+    pub fn default_capacity(&self) -> usize {
+        self.default_capacity.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for FrameBufferPool {
+    fn default() -> Self {
+        Self::new(32, 0)
+    }
+}
+
+/// Single slot in the lookahead ring buffer holding a video frame and its presentation metadata.
+struct RingSlot {
+    frame: Mutex<Option<VideoFrame>>,
+    pts: AtomicI64,
+    duration_pts: AtomicI64,
+    epoch: AtomicU64,
+}
+
+impl RingSlot {
+    fn new() -> Self {
+        Self {
+            frame: Mutex::new(None),
+            pts: AtomicI64::new(0),
+            duration_pts: AtomicI64::new(0),
+            epoch: AtomicU64::new(0),
+        }
+    }
+}
+
+/// Thread-safe bounded ring buffer holding decoded lookahead video frames.
+///
+/// Refactored for SPSC (Single-Producer Single-Consumer) low-contention execution:
+/// the producer (decoder worker) and consumer (presenter) write and read to independent
+/// slot indices with atomic release/acquire synchronization, eliminating lock contention.
+pub struct LookaheadRingBuffer {
+    capacity: usize,
+    slots: Box<[RingSlot]>,
+
+    head: AtomicUsize,
+    tail: AtomicUsize,
+    epoch: AtomicU64,
+    eos_reached: AtomicBool,
+    closed: AtomicBool,
+    dropped_frames: AtomicU64,
+
+    producer_mutex: Mutex<()>,
+    consumer_mutex: Mutex<()>,
+
+    not_full_cond: Condvar,
+    not_full_mutex: Mutex<()>,
+
+    not_empty_cond: Condvar,
+    not_empty_mutex: Mutex<()>,
+
+    pool: Arc<FrameBufferPool>,
 }
 
 impl LookaheadRingBuffer {
     /// Creates a new `LookaheadRingBuffer` with the specified frame capacity.
     pub fn new(capacity: usize) -> Self {
+        Self::with_pool(capacity, Arc::new(FrameBufferPool::new(capacity * 2, 0)))
+    }
+
+    /// Creates a new `LookaheadRingBuffer` with a shared `FrameBufferPool`.
+    pub fn with_pool(capacity: usize, pool: Arc<FrameBufferPool>) -> Self {
         let cap = capacity.clamp(MIN_LOOKAHEAD_CAPACITY, 64);
+        let mut slots = Vec::with_capacity(cap);
+        for _ in 0..cap {
+            slots.push(RingSlot::new());
+        }
         Self {
             capacity: cap,
-            state: Mutex::new(RingBufferState {
-                queue: VecDeque::with_capacity(cap),
-                epoch: 0,
-                closed: false,
-                eos_reached: false,
-                dropped_frames: 0,
-            }),
-            not_full: Condvar::new(),
-            not_empty: Condvar::new(),
+            slots: slots.into_boxed_slice(),
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+            epoch: AtomicU64::new(0),
+            eos_reached: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+            dropped_frames: AtomicU64::new(0),
+            producer_mutex: Mutex::new(()),
+            consumer_mutex: Mutex::new(()),
+            not_full_cond: Condvar::new(),
+            not_full_mutex: Mutex::new(()),
+            not_empty_cond: Condvar::new(),
+            not_empty_mutex: Mutex::new(()),
+            pool,
         }
+    }
+
+    /// Access the underlying `FrameBufferPool`.
+    #[inline]
+    pub fn pool(&self) -> &Arc<FrameBufferPool> {
+        &self.pool
+    }
+
+    /// Acquires a reusable buffer from the internal frame buffer pool.
+    #[inline]
+    pub fn acquire_buffer(&self, required_bytes: usize) -> Vec<u8> {
+        self.pool.acquire(required_bytes)
+    }
+
+    /// Recycles a buffer back to the internal frame buffer pool.
+    #[inline]
+    pub fn recycle_buffer(&self, buffer: Vec<u8>) {
+        self.pool.recycle(buffer);
     }
 
     /// Maximum capacity of the ring buffer.
@@ -73,174 +218,299 @@ impl LookaheadRingBuffer {
         self.capacity
     }
 
-    /// Number of frames currently buffered.
+    /// Number of frames currently buffered (lock-free).
     #[inline]
     pub fn len(&self) -> usize {
-        self.state.lock().unwrap().queue.len()
+        let t = self.tail.load(Ordering::Acquire);
+        let h = self.head.load(Ordering::Acquire);
+        t.saturating_sub(h)
     }
 
-    /// Returns `true` if no frames are currently queued.
+    /// Returns `true` if no frames are currently queued (lock-free).
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.state.lock().unwrap().queue.is_empty()
+        self.len() == 0
     }
 
-    /// Returns `true` if the buffer is currently at full capacity.
+    /// Returns `true` if the buffer is currently at full capacity (lock-free).
     #[inline]
     pub fn is_full(&self) -> bool {
-        let st = self.state.lock().unwrap();
-        st.queue.len() >= self.capacity
+        self.len() >= self.capacity
     }
 
-    /// Current seek epoch identifier.
+    /// Current seek epoch identifier (lock-free).
     #[inline]
     pub fn current_epoch(&self) -> u64 {
-        self.state.lock().unwrap().epoch
+        self.epoch.load(Ordering::Acquire)
     }
 
-    /// Returns `true` if end of stream has been flagged for the current epoch.
+    /// Returns `true` if end of stream has been flagged for the current epoch (lock-free).
     #[inline]
     pub fn is_eos(&self) -> bool {
-        self.state.lock().unwrap().eos_reached
+        self.eos_reached.load(Ordering::Acquire)
     }
 
     /// Flags whether the current epoch reached end of stream.
     pub fn set_eos(&self, epoch: u64, eos: bool) {
-        let mut st = self.state.lock().unwrap();
-        if st.epoch == epoch {
-            st.eos_reached = eos;
-            self.not_empty.notify_all();
+        if self.epoch.load(Ordering::Acquire) == epoch {
+            self.eos_reached.store(eos, Ordering::Release);
+            self.not_empty_cond.notify_all();
         }
     }
 
     /// Pushes a decoded frame into the back of the buffer.
     ///
-    /// If full, blocks until space is made available or until the timeout expires.
-    /// Aborts immediately if the epoch changes or the buffer is closed.
+    /// The producer locks only its own producer mutex, never contending with consumer peek/pop.
+    /// If full, yields on a condition variable until space is freed or timeout expires.
     pub fn push_wait(
         &self,
         frame: VideoFrame,
         epoch: u64,
         timeout: Option<Duration>,
     ) -> Result<(), BufferError> {
-        let mut st = self.state.lock().unwrap();
+        let start = Instant::now();
+
         loop {
-            if st.closed {
+            if self.closed.load(Ordering::Acquire) {
+                self.pool.recycle(frame.data);
                 return Err(BufferError::Closed);
             }
-            if st.epoch != epoch {
+            if self.epoch.load(Ordering::Acquire) != epoch {
+                self.pool.recycle(frame.data);
                 return Err(BufferError::StaleEpoch);
             }
-            if st.queue.len() < self.capacity {
-                st.queue.push_back(frame);
-                self.not_empty.notify_one();
-                return Ok(());
+
+            {
+                let _prod_guard = self.producer_mutex.lock().unwrap();
+                if self.closed.load(Ordering::Acquire) {
+                    self.pool.recycle(frame.data);
+                    return Err(BufferError::Closed);
+                }
+                if self.epoch.load(Ordering::Acquire) != epoch {
+                    self.pool.recycle(frame.data);
+                    return Err(BufferError::StaleEpoch);
+                }
+
+                let t = self.tail.load(Ordering::Acquire);
+                let h = self.head.load(Ordering::Acquire);
+
+                if t.saturating_sub(h) < self.capacity {
+                    let slot = &self.slots[t % self.capacity];
+                    slot.pts.store(frame.pts, Ordering::Release);
+                    slot.duration_pts.store(frame.duration_pts, Ordering::Release);
+                    slot.epoch.store(epoch, Ordering::Release);
+
+                    let mut slot_frame = slot.frame.lock().unwrap();
+                    *slot_frame = Some(frame);
+                    drop(slot_frame);
+
+                    self.tail.store(t + 1, Ordering::Release);
+                    self.not_empty_cond.notify_one();
+                    return Ok(());
+                }
+            }
+
+            // Buffer is full: wait on not_full_cond without holding producer_mutex
+            let guard = self.not_full_mutex.lock().unwrap();
+            let t = self.tail.load(Ordering::Acquire);
+            let h = self.head.load(Ordering::Acquire);
+            if t.saturating_sub(h) < self.capacity {
+                drop(guard);
+                continue;
             }
 
             if let Some(dur) = timeout {
-                let (new_st, timeout_res) = self.not_full.wait_timeout(st, dur).unwrap();
-                st = new_st;
-                if timeout_res.timed_out() {
-                    if st.closed {
-                        return Err(BufferError::Closed);
-                    }
-                    if st.epoch != epoch {
-                        return Err(BufferError::StaleEpoch);
-                    }
-                    if st.queue.len() < self.capacity {
-                        st.queue.push_back(frame);
-                        self.not_empty.notify_one();
-                        return Ok(());
-                    }
+                let elapsed = start.elapsed();
+                if elapsed >= dur {
+                    drop(guard);
+                    self.pool.recycle(frame.data);
                     return Err(BufferError::Timeout);
                 }
+                let remaining = dur - elapsed;
+                let (new_guard, timeout_res) =
+                    self.not_full_cond.wait_timeout(guard, remaining).unwrap();
+                drop(new_guard);
+                if timeout_res.timed_out() {
+                    let t = self.tail.load(Ordering::Acquire);
+                    let h = self.head.load(Ordering::Acquire);
+                    if t.saturating_sub(h) >= self.capacity {
+                        self.pool.recycle(frame.data);
+                        return Err(BufferError::Timeout);
+                    }
+                }
             } else {
-                st = self.not_full.wait(st).unwrap();
+                let new_guard = self.not_full_cond.wait(guard).unwrap();
+                drop(new_guard);
             }
         }
     }
 
-    /// Non-blocking peek of presentation timestamp (PTS) and duration of the front frame.
-    ///
-    /// Returns `None` if the queue is empty. Avoids copying pixel buffers.
+    /// Non-blocking, lock-free peek of presentation timestamp (PTS) and duration of the front frame.
+    #[inline]
     pub fn peek_pts_and_duration(&self) -> Option<(i64, i64)> {
-        let st = self.state.lock().unwrap();
-        st.queue.front().map(|f| (f.pts, f.duration_pts))
+        let h = self.head.load(Ordering::Acquire);
+        let t = self.tail.load(Ordering::Acquire);
+        if h >= t {
+            return None;
+        }
+        let slot = &self.slots[h % self.capacity];
+        Some((
+            slot.pts.load(Ordering::Acquire),
+            slot.duration_pts.load(Ordering::Acquire),
+        ))
     }
 
-    /// Non-blocking peek of the front frame `(pts, duration_pts)` plus the PTS of the
-    /// frame queued right behind it (if any). Avoids copying pixel buffers.
+    /// Non-blocking, lock-free peek of the front frame `(pts, duration_pts)` plus the PTS of the
+    /// frame queued right behind it (if any).
+    #[inline]
     pub fn peek_front_with_successor(&self) -> Option<(i64, i64, Option<i64>)> {
-        let st = self.state.lock().unwrap();
-        st.queue
-            .front()
-            .map(|f| (f.pts, f.duration_pts, st.queue.get(1).map(|n| n.pts)))
+        let h = self.head.load(Ordering::Acquire);
+        let t = self.tail.load(Ordering::Acquire);
+        if h >= t {
+            return None;
+        }
+        let front_slot = &self.slots[h % self.capacity];
+        let front_pts = front_slot.pts.load(Ordering::Acquire);
+        let front_dur = front_slot.duration_pts.load(Ordering::Acquire);
+
+        let next_pts = if t > h + 1 {
+            let next_slot = &self.slots[(h + 1) % self.capacity];
+            Some(next_slot.pts.load(Ordering::Acquire))
+        } else {
+            None
+        };
+        Some((front_pts, front_dur, next_pts))
     }
 
-    /// Non-blocking check of the presentation timestamp (PTS) of the newest/back frame.
+    /// Non-blocking, lock-free check of the presentation timestamp (PTS) of the newest/back frame.
     #[inline]
     pub fn highest_buffered_pts(&self) -> Option<i64> {
-        let st = self.state.lock().unwrap();
-        st.queue.back().map(|f| f.pts)
+        let h = self.head.load(Ordering::Acquire);
+        let t = self.tail.load(Ordering::Acquire);
+        if h >= t {
+            return None;
+        }
+        let slot = &self.slots[(t - 1) % self.capacity];
+        Some(slot.pts.load(Ordering::Acquire))
     }
 
     /// Checks whether the frames currently buffered are capable of catching up to `master_pts`
-    /// within `tolerance_pts` without needing a decoder keyframe seek.
+    /// within `tolerance_pts` without needing a decoder keyframe seek (lock-free).
     #[inline]
     pub fn can_catch_up(&self, master_pts: i64, tolerance_pts: i64) -> bool {
-        let st = self.state.lock().unwrap();
-        st.queue
-            .back()
-            .map(|f| f.pts.saturating_add(tolerance_pts.max(0)) >= master_pts)
+        self.highest_buffered_pts()
+            .map(|pts| pts.saturating_add(tolerance_pts.max(0)) >= master_pts)
             .unwrap_or(false)
     }
 
     /// Pops the front frame from the queue, signaling waiting producers.
+    ///
+    /// Consumer locks only its consumer mutex, never contending with producer writes.
     pub fn pop_front(&self) -> Option<VideoFrame> {
-        let mut st = self.state.lock().unwrap();
-        let frame = st.queue.pop_front();
-        if frame.is_some() {
-            self.not_full.notify_one();
+        let _cons_guard = self.consumer_mutex.lock().unwrap();
+        let h = self.head.load(Ordering::Acquire);
+        let t = self.tail.load(Ordering::Acquire);
+        if h >= t {
+            return None;
         }
+        let slot = &self.slots[h % self.capacity];
+        let mut slot_frame = slot.frame.lock().unwrap();
+        let frame = slot_frame.take();
+        drop(slot_frame);
+
+        self.head.store(h + 1, Ordering::Release);
+        self.not_full_cond.notify_one();
         frame
     }
 
-    /// Drops the front frame without copying, incrementing `dropped_frames` counter.
-    ///
-    /// Returns `true` if a frame was dropped, or `false` if the buffer was empty.
-    pub fn drop_front(&self) -> bool {
-        let mut st = self.state.lock().unwrap();
-        if st.queue.pop_front().is_some() {
-            st.dropped_frames += 1;
-            self.not_full.notify_one();
-            true
-        } else {
-            false
+    /// Pops the front frame from the queue, blocking until a frame is available, closed, or timeout expires.
+    pub fn pop_wait(&self, timeout: Option<Duration>) -> Option<VideoFrame> {
+        let start = Instant::now();
+        loop {
+            if let Some(frame) = self.pop_front() {
+                return Some(frame);
+            }
+            if self.closed.load(Ordering::Acquire) || self.eos_reached.load(Ordering::Acquire) {
+                return None;
+            }
+            let guard = self.not_empty_mutex.lock().unwrap();
+            if !self.is_empty() {
+                drop(guard);
+                continue;
+            }
+            if let Some(dur) = timeout {
+                let elapsed = start.elapsed();
+                if elapsed >= dur {
+                    drop(guard);
+                    return None;
+                }
+                let remaining = dur - elapsed;
+                let (new_guard, _) = self.not_empty_cond.wait_timeout(guard, remaining).unwrap();
+                drop(new_guard);
+            } else {
+                let new_guard = self.not_empty_cond.wait(guard).unwrap();
+                drop(new_guard);
+            }
         }
     }
 
-    /// Flushes all queued frames and increments/updates the seek epoch.
+    /// Drops the front frame without copying, automatically recycling its pixel buffer
+    /// and incrementing the `dropped_frames` counter.
+    pub fn drop_front(&self) -> bool {
+        let _cons_guard = self.consumer_mutex.lock().unwrap();
+        let h = self.head.load(Ordering::Acquire);
+        let t = self.tail.load(Ordering::Acquire);
+        if h >= t {
+            return false;
+        }
+        let slot = &self.slots[h % self.capacity];
+        let mut slot_frame = slot.frame.lock().unwrap();
+        if let Some(frame) = slot_frame.take() {
+            self.pool.recycle(frame.data);
+        }
+        drop(slot_frame);
+
+        self.head.store(h + 1, Ordering::Release);
+        self.dropped_frames.fetch_add(1, Ordering::Relaxed);
+        self.not_full_cond.notify_one();
+        true
+    }
+
+    /// Flushes all queued frames, recycles their pixel buffers, and updates the seek epoch.
     pub fn flush_and_set_epoch(&self, new_epoch: u64) {
-        let mut st = self.state.lock().unwrap();
-        st.queue.clear();
-        st.epoch = new_epoch;
-        st.eos_reached = false;
-        self.not_full.notify_all();
-        self.not_empty.notify_all();
+        let _prod_guard = self.producer_mutex.lock().unwrap();
+        let _cons_guard = self.consumer_mutex.lock().unwrap();
+
+        let h = self.head.load(Ordering::Acquire);
+        let t = self.tail.load(Ordering::Acquire);
+        for idx in h..t {
+            let slot = &self.slots[idx % self.capacity];
+            let mut slot_frame = slot.frame.lock().unwrap();
+            if let Some(frame) = slot_frame.take() {
+                self.pool.recycle(frame.data);
+            }
+        }
+
+        self.head.store(0, Ordering::Release);
+        self.tail.store(0, Ordering::Release);
+        self.epoch.store(new_epoch, Ordering::Release);
+        self.eos_reached.store(false, Ordering::Release);
+
+        self.not_full_cond.notify_all();
+        self.not_empty_cond.notify_all();
     }
 
     /// Closes the buffer, waking up all waiting producers and consumers.
     pub fn close(&self) {
-        let mut st = self.state.lock().unwrap();
-        st.closed = true;
-        self.not_full.notify_all();
-        self.not_empty.notify_all();
+        self.closed.store(true, Ordering::Release);
+        self.not_full_cond.notify_all();
+        self.not_empty_cond.notify_all();
     }
 
     /// Total count of frames dropped by frame dropping logic.
     #[inline]
     pub fn dropped_frames(&self) -> u64 {
-        self.state.lock().unwrap().dropped_frames
+        self.dropped_frames.load(Ordering::Acquire)
     }
 }
 
@@ -1092,6 +1362,147 @@ mod tests {
             let pts = r.join().unwrap();
             assert!(pts >= 200);
         }
+    }
+
+    #[test]
+    fn test_frame_buffer_pool_zero_allocations_after_warmup() {
+        let pool = Arc::new(FrameBufferPool::new(8, 1024));
+        assert_eq!(pool.free_count(), 8);
+        assert_eq!(pool.alloc_count(), 8);
+        assert_eq!(pool.recycle_count(), 0);
+        assert_eq!(pool.default_capacity(), 1024);
+
+        // Acquire all 8 pre-warmed buffers
+        let mut acquired = Vec::new();
+        for _ in 0..8 {
+            let buf = pool.acquire(1024);
+            assert!(buf.capacity() >= 1024);
+            acquired.push(buf);
+        }
+        assert_eq!(pool.free_count(), 0);
+        assert_eq!(pool.alloc_count(), 8);
+
+        // Recycle all 8 buffers
+        for buf in acquired {
+            pool.recycle(buf);
+        }
+        assert_eq!(pool.free_count(), 8);
+        assert_eq!(pool.recycle_count(), 8);
+        assert_eq!(pool.alloc_count(), 8); // Still 8! Zero new allocations!
+
+        // Continuous acquire and recycle cycle: alloc_count MUST remain strictly 8!
+        for _ in 0..100 {
+            let mut buf = pool.acquire(1024);
+            buf.extend_from_slice(&[42u8; 1024]);
+            assert_eq!(buf.len(), 1024);
+            pool.recycle(buf);
+        }
+        assert_eq!(pool.free_count(), 8);
+        assert_eq!(pool.alloc_count(), 8); // Zero new allocations!
+        assert_eq!(pool.recycle_count(), 108);
+    }
+
+    #[test]
+    fn test_lookahead_ring_buffer_spsc_concurrency() {
+        let pool = Arc::new(FrameBufferPool::new(16, 2048));
+        let buffer = Arc::new(LookaheadRingBuffer::with_pool(8, pool.clone()));
+        let initial_allocs = pool.alloc_count();
+        assert_eq!(initial_allocs, 16);
+
+        let total_frames = 100;
+        let buf_producer = Arc::clone(&buffer);
+        let producer_handle = thread::spawn(move || {
+            for i in 0..total_frames {
+                let mut data = buf_producer.acquire_buffer(2048);
+                data.resize(2048, (i % 255) as u8);
+                let vf = VideoFrame {
+                    pts: i,
+                    duration_pts: 1,
+                    width: 32,
+                    height: 16,
+                    format: PixelFormat::Rgba8,
+                    data,
+                    row_stride_bytes: 128,
+                    timebase: Rational { num: 60, den: 1 },
+                    is_keyframe: i % 10 == 0,
+                };
+                buf_producer.push_wait(vf, 0, None).unwrap();
+            }
+        });
+
+        let buf_consumer = Arc::clone(&buffer);
+        let consumer_handle = thread::spawn(move || {
+            let mut received = 0;
+            for i in 0..total_frames {
+                let frame = buf_consumer.pop_wait(Some(Duration::from_secs(3))).expect("Frame must arrive");
+                assert_eq!(frame.pts, i);
+                assert_eq!(frame.data.len(), 2048);
+                assert_eq!(frame.data[0], (i % 255) as u8);
+                // Presenter recycles buffer upon consumption
+                buf_consumer.recycle_buffer(frame.data);
+                received += 1;
+            }
+            received
+        });
+
+        producer_handle.join().unwrap();
+        let received = consumer_handle.join().unwrap();
+        assert_eq!(received, total_frames);
+
+        // Verify all 16 buffers are safely back in the pool and NO allocations occurred during the loop!
+        assert_eq!(pool.free_count(), 16);
+        assert_eq!(pool.alloc_count(), initial_allocs);
+    }
+
+    #[test]
+    fn test_lookahead_ring_buffer_flush_and_epoch_invalidation() {
+        let pool = Arc::new(FrameBufferPool::new(12, 1024));
+        let buffer = Arc::new(LookaheadRingBuffer::with_pool(6, pool.clone()));
+        assert_eq!(pool.free_count(), 12);
+
+        // Fill buffer at epoch 0
+        for i in 0..6 {
+            let mut data = buffer.acquire_buffer(1024);
+            data.resize(1024, i as u8);
+            let vf = VideoFrame {
+                pts: i as i64,
+                duration_pts: 1,
+                width: 16,
+                height: 16,
+                format: PixelFormat::Rgba8,
+                data,
+                row_stride_bytes: 64,
+                timebase: Rational { num: 60, den: 1 },
+                is_keyframe: true,
+            };
+            buffer.push_wait(vf, 0, None).unwrap();
+        }
+        assert_eq!(buffer.len(), 6);
+        assert_eq!(pool.free_count(), 6);
+
+        // Flush on seek to epoch 1: should immediately drain and recycle all 6 frames
+        buffer.flush_and_set_epoch(1);
+        assert_eq!(buffer.len(), 0);
+        assert_eq!(buffer.current_epoch(), 1);
+        assert_eq!(pool.free_count(), 12); // All 6 frame buffers recycled!
+
+        // Attempting to push with old epoch 0 is rejected with StaleEpoch and recycles its buffer
+        let stale_buf = buffer.acquire_buffer(1024);
+        assert_eq!(pool.free_count(), 11);
+        let stale_vf = VideoFrame {
+            pts: 99,
+            duration_pts: 1,
+            width: 16,
+            height: 16,
+            format: PixelFormat::Rgba8,
+            data: stale_buf,
+            row_stride_bytes: 64,
+            timebase: Rational { num: 60, den: 1 },
+            is_keyframe: true,
+        };
+        let err = buffer.push_wait(stale_vf, 0, None).unwrap_err();
+        assert_eq!(err, BufferError::StaleEpoch);
+        assert_eq!(pool.free_count(), 12); // Stale frame's buffer was recycled!
     }
 }
 
