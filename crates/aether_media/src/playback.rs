@@ -169,6 +169,24 @@ impl LookaheadRingBuffer {
             .map(|f| (f.pts, f.duration_pts, st.queue.get(1).map(|n| n.pts)))
     }
 
+    /// Non-blocking check of the presentation timestamp (PTS) of the newest/back frame.
+    #[inline]
+    pub fn highest_buffered_pts(&self) -> Option<i64> {
+        let st = self.state.lock().unwrap();
+        st.queue.back().map(|f| f.pts)
+    }
+
+    /// Checks whether the frames currently buffered are capable of catching up to `master_pts`
+    /// within `tolerance_pts` without needing a decoder keyframe seek.
+    #[inline]
+    pub fn can_catch_up(&self, master_pts: i64, tolerance_pts: i64) -> bool {
+        let st = self.state.lock().unwrap();
+        st.queue
+            .back()
+            .map(|f| f.pts.saturating_add(tolerance_pts.max(0)) >= master_pts)
+            .unwrap_or(false)
+    }
+
     /// Pops the front frame from the queue, signaling waiting producers.
     pub fn pop_front(&self) -> Option<VideoFrame> {
         let mut st = self.state.lock().unwrap();
@@ -333,34 +351,231 @@ impl MasterClock {
 /// Action determined by the frame dropping evaluator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameAction {
-    /// The frame is late: the playhead has reached or exceeded frame N+1 before frame N
-    /// was presented. Drop frame N immediately to avoid cumulative drift.
-    Drop,
-    /// The frame is on time: due for presentation in the current display interval.
+    /// The frame is on time (within sync tolerance, e.g. <= 25ms delay): present immediately.
     Present,
     /// The frame is in the future: presentation should wait until its PTS arrives.
     Wait { pts_ahead: i64 },
+    /// Mild or moderate lag (e.g. 25ms to 180ms/200ms):
+    /// Drop frame from presentation ring buffer without interrupting or seeking the decoder.
+    SoftDrop,
+    /// Severe lag (e.g. > 200ms) with buffer unable to catch up:
+    /// Initiate keyframe recovery seek via .index, subject to cooldown (min 500ms).
+    HardDrop { target_pts: i64 },
+    /// Legacy drop variant (maps to SoftDrop behavior for backwards compatibility).
+    Drop,
 }
 
-/// Evaluates frame presentation timing against the master clock to enforce A/V sync.
-pub struct FrameDropper;
+impl FrameAction {
+    /// Returns `true` if the action is a drop (SoftDrop, HardDrop, or legacy Drop).
+    #[inline]
+    pub fn is_drop(&self) -> bool {
+        matches!(
+            self,
+            FrameAction::SoftDrop | FrameAction::HardDrop { .. } | FrameAction::Drop
+        )
+    }
+
+    /// Returns `true` if the action is Present.
+    #[inline]
+    pub fn is_present(&self) -> bool {
+        matches!(self, FrameAction::Present)
+    }
+}
+
+/// Evaluates frame presentation timing against the master clock to enforce A/V sync
+/// with a two-tiered tolerance policy (Soft Drop vs. Hard Drop).
+///
+/// # Two-Tiered Policy:
+/// 1. **On-Time (`Present`):** Lag is within `SYNC_TOLERANCE_MS` (<= 25ms). Frame is presented immediately.
+/// 2. **Mild/Moderate Lag (`SoftDrop`):** Lag is between 25ms and `HARD_DROP_THRESHOLD_MS` (<= 200ms),
+///    OR the lookahead buffer already holds frames that can catch up to the master clock.
+///    The presenter discards stale frames from the ring buffer without touching the decoder, preserving
+///    the inter-frame P/B reference chain.
+/// 3. **Severe Lag (`HardDrop`):** Lag exceeds `HARD_DROP_THRESHOLD_MS` (> 200ms) AND the buffer cannot
+///    catch up. Initiates a keyframe seek via `.index`. Enforces `HARD_DROP_COOLDOWN_MS` (>= 500ms)
+///    to prevent "death spiral" seek loops on underpowered machines.
+#[derive(Debug)]
+pub struct FrameDropper {
+    pub sync_tolerance_ms: u64,
+    pub soft_drop_threshold_ms: u64,
+    pub hard_drop_threshold_ms: u64,
+    pub hard_drop_cooldown: Duration,
+    last_hard_drop: Mutex<Option<Instant>>,
+}
+
+impl Clone for FrameDropper {
+    fn clone(&self) -> Self {
+        let last = *self.last_hard_drop.lock().unwrap();
+        Self {
+            sync_tolerance_ms: self.sync_tolerance_ms,
+            soft_drop_threshold_ms: self.soft_drop_threshold_ms,
+            hard_drop_threshold_ms: self.hard_drop_threshold_ms,
+            hard_drop_cooldown: self.hard_drop_cooldown,
+            last_hard_drop: Mutex::new(last),
+        }
+    }
+}
 
 impl FrameDropper {
-    /// Default maximum allowed late frame multiplier before authorizing a frame drop (2x frame duration).
+    /// Nominal sync tolerance: <= 25ms lag is considered on-time -> Present.
+    pub const SYNC_TOLERANCE_MS: u64 = 25;
+    /// Upper bound for soft drop range: mild/moderate lag up to 180ms -> SoftDrop.
+    pub const SOFT_DROP_THRESHOLD_MS: u64 = 180;
+    /// Threshold beyond which severe lag triggers a HardDrop (> 200ms).
+    pub const HARD_DROP_THRESHOLD_MS: u64 = 200;
+    /// Minimum cooldown between consecutive Hard Drops (500ms) to prevent seek death spirals.
+    pub const HARD_DROP_COOLDOWN_MS: u64 = 500;
+    /// Default maximum allowed late frame multiplier (legacy).
     pub const DEFAULT_MAX_LATE_MULTIPLIER: i64 = 2;
+
+    /// Creates a new `FrameDropper` with custom tolerance thresholds and cooldown.
+    pub fn new(
+        sync_tolerance_ms: u64,
+        soft_drop_threshold_ms: u64,
+        hard_drop_threshold_ms: u64,
+        hard_drop_cooldown: Duration,
+    ) -> Self {
+        Self {
+            sync_tolerance_ms,
+            soft_drop_threshold_ms,
+            hard_drop_threshold_ms,
+            hard_drop_cooldown,
+            last_hard_drop: Mutex::new(None),
+        }
+    }
+
+    /// Creates a `FrameDropper` with default thresholds (25ms sync, 180ms soft, 200ms hard, 500ms cooldown).
+    pub fn with_defaults() -> Self {
+        Self::new(
+            Self::SYNC_TOLERANCE_MS,
+            Self::SOFT_DROP_THRESHOLD_MS,
+            Self::HARD_DROP_THRESHOLD_MS,
+            Duration::from_millis(Self::HARD_DROP_COOLDOWN_MS),
+        )
+    }
+
+    /// Evaluates time delta in milliseconds at a specific timestamp for deterministic testing.
+    pub fn evaluate_delta_at(
+        &self,
+        delta_ms: i64,
+        buffer_can_catch_up: bool,
+        target_pts: i64,
+        now: Instant,
+    ) -> FrameAction {
+        // Frame is in the future: presentation clock hasn't arrived at frame time
+        if delta_ms < -(self.sync_tolerance_ms as i64) {
+            let pts_ahead = delta_ms.abs();
+            return FrameAction::Wait { pts_ahead };
+        }
+
+        // 1. Within sync tolerance (-SYNC_TOLERANCE_MS <= delta_ms <= SYNC_TOLERANCE_MS): Present
+        if delta_ms <= self.sync_tolerance_ms as i64 {
+            return FrameAction::Present;
+        }
+
+        // 2. Soft Drop zone: lag is mild to moderate (<= HARD_DROP_THRESHOLD_MS)
+        // OR the buffer already has frames that can catch up to the clock
+        if delta_ms <= self.hard_drop_threshold_ms as i64 || buffer_can_catch_up {
+            return FrameAction::SoftDrop;
+        }
+
+        // 3. Severe lag (> HARD_DROP_THRESHOLD_MS) AND buffer cannot catch up:
+        let mut last_drop = self.last_hard_drop.lock().unwrap();
+        if let Some(prev) = *last_drop {
+            if now.saturating_duration_since(prev) < self.hard_drop_cooldown {
+                // Cooldown active: avoid seek death spiral, fall back to SoftDrop
+                return FrameAction::SoftDrop;
+            }
+        }
+
+        // Cooldown expired: trigger HardDrop seek recovery
+        *last_drop = Some(now);
+        FrameAction::HardDrop { target_pts }
+    }
+
+    /// Evaluates time delta in milliseconds using Instant::now().
+    pub fn evaluate_delta(
+        &self,
+        delta_ms: i64,
+        buffer_can_catch_up: bool,
+        target_pts: i64,
+    ) -> FrameAction {
+        self.evaluate_delta_at(delta_ms, buffer_can_catch_up, target_pts, Instant::now())
+    }
+
+    /// Evaluates PTS against master clock PTS at a specific timestamp.
+    pub fn evaluate_pts_at(
+        &self,
+        front_frame_pts: i64,
+        master_pts: i64,
+        fps: f64,
+        buffer_can_catch_up: bool,
+        now: Instant,
+    ) -> FrameAction {
+        if master_pts < front_frame_pts {
+            let pts_ahead = front_frame_pts.saturating_sub(master_pts);
+            return FrameAction::Wait { pts_ahead };
+        }
+
+        let delta_pts = master_pts.saturating_sub(front_frame_pts);
+        let delta_ms = if fps > 0.0 {
+            ((delta_pts as f64 / fps) * 1000.0).round() as i64
+        } else {
+            0
+        };
+
+        self.evaluate_delta_at(delta_ms, buffer_can_catch_up, master_pts, now)
+    }
+
+    /// Evaluates PTS against master clock PTS using Instant::now().
+    pub fn evaluate_pts(
+        &self,
+        front_frame_pts: i64,
+        master_pts: i64,
+        fps: f64,
+        buffer_can_catch_up: bool,
+    ) -> FrameAction {
+        self.evaluate_pts_at(
+            front_frame_pts,
+            master_pts,
+            fps,
+            buffer_can_catch_up,
+            Instant::now(),
+        )
+    }
+
+    /// Checks if hard drop cooldown is currently active at `now`.
+    pub fn is_cooldown_active_at(&self, now: Instant) -> bool {
+        if let Some(prev) = *self.last_hard_drop.lock().unwrap() {
+            now.saturating_duration_since(prev) < self.hard_drop_cooldown
+        } else {
+            false
+        }
+    }
+
+    /// Checks if hard drop cooldown is currently active.
+    pub fn is_cooldown_active(&self) -> bool {
+        self.is_cooldown_active_at(Instant::now())
+    }
+
+    /// Resets the hard drop cooldown timer.
+    pub fn reset_cooldown(&self) {
+        *self.last_hard_drop.lock().unwrap() = None;
+    }
+
+    /// Static evaluation using default thresholds and Instant::now().
+    pub fn evaluate_static(
+        delta_ms: i64,
+        buffer_can_catch_up: bool,
+        target_pts: i64,
+    ) -> FrameAction {
+        static DEFAULT_DROPPER: std::sync::LazyLock<FrameDropper> =
+            std::sync::LazyLock::new(FrameDropper::with_defaults);
+        DEFAULT_DROPPER.evaluate_delta(delta_ms, buffer_can_catch_up, target_pts)
+    }
 
     /// Evaluates whether the front frame should be dropped, presented, or waited on,
     /// applying hysteresis tolerance to preserve visual smoothness.
-    ///
-    /// # Hysteresis Rules:
-    /// - **Aguardar (`Wait`):** Se o quadro estiver no futuro (`master_pts < front_frame_pts`),
-    ///   aguarda a diferença respeitando o framerate.
-    /// - **Apresentar Imediatamente (`Present`):** Se o quadro estiver no tempo exato ou
-    ///   ligeiramente atrasado dentro de um limiar tolerável (`delay <= 2 * duration`),
-    ///   o frame é apresentado imediatamente para manter a fluidez visual sem engasgos.
-    /// - **Descarte (`Drop`):** Apenas descarta se o quadro estiver criticamente atrasado
-    ///   por mais de 2x a duração de um frame (`master_pts > front_frame_pts + 2 * duration`),
-    ///   evitando atraso acumulado sob sobrecarga severa.
     #[inline]
     pub fn evaluate(
         front_frame_pts: i64,
@@ -394,18 +609,11 @@ impl FrameDropper {
         } else if master_pts <= drop_threshold {
             FrameAction::Present
         } else {
-            FrameAction::Drop
+            FrameAction::SoftDrop
         }
     }
 
     /// Successor-aware evaluation used by the realtime emitter.
-    ///
-    /// A late frame is dropped **only** if the frame queued right behind it is
-    /// itself already due (`master_pts >= next_pts`): skipping is then free, since a
-    /// newer image can be shown immediately. When the late frame is the only one
-    /// available (decoder behind the playhead), it is presented instead of being
-    /// discarded — dropping it would leave the screen frozen on the previous image,
-    /// which is exactly the cascade observed when the decoder cannot keep up.
     #[inline]
     pub fn evaluate_with_successor(
         front_frame_pts: i64,
@@ -419,10 +627,16 @@ impl FrameDropper {
         }
         match next_frame_pts {
             Some(next_pts) if next_pts > front_frame_pts && master_pts >= next_pts => {
-                FrameAction::Drop
+                FrameAction::SoftDrop
             }
             _ => FrameAction::Present,
         }
+    }
+}
+
+impl Default for FrameDropper {
+    fn default() -> Self {
+        Self::with_defaults()
     }
 }
 
@@ -569,9 +783,9 @@ mod tests {
 
         // 3. Criticamente atrasado (> 2 frames de atraso):
         // Quando o atraso ultrapassa 2x a duração do frame (master_pts >= 15), descarta o frame
-        // para recuperar a sincronia e evitar acúmulo de latência.
-        assert_eq!(FrameDropper::evaluate(10, 2, 15), FrameAction::Drop);
-        assert_eq!(FrameDropper::evaluate(10, 2, 25), FrameAction::Drop);
+        // para recuperar a sincronia e evitar acúmulo de latência (SoftDrop preserva integridade do decodificador).
+        assert_eq!(FrameDropper::evaluate(10, 2, 15), FrameAction::SoftDrop);
+        assert_eq!(FrameDropper::evaluate(10, 2, 25), FrameAction::SoftDrop);
 
         // 4. Adiantado (no futuro em relação ao relógio mestre):
         // Quando master_pts < front_frame_pts, aguarda até o tempo do quadro.
@@ -587,7 +801,7 @@ mod tests {
         );
         assert_eq!(
             FrameDropper::evaluate_with_tolerance(10, 2, 13, 1),
-            FrameAction::Drop
+            FrameAction::SoftDrop
         );
     }
 
@@ -608,16 +822,149 @@ mod tests {
             FrameDropper::evaluate_with_successor(10, Some(12), 11),
             FrameAction::Present
         );
-        // Successor already due -> Drop current (newer image is available)
+        // Successor already due -> SoftDrop current (newer image is available)
         assert_eq!(
             FrameDropper::evaluate_with_successor(10, Some(12), 12),
-            FrameAction::Drop
+            FrameAction::SoftDrop
         );
         // Critically late but it is the only decoded frame -> must Present, never freeze
         assert_eq!(
             FrameDropper::evaluate_with_successor(2, None, 271),
             FrameAction::Present
         );
+    }
+
+    #[test]
+    fn test_frame_dropper_two_tiered_soft_and_hard_drop_decisions() {
+        let dropper = FrameDropper::with_defaults();
+        let t0 = Instant::now();
+
+        // 1. On-time / within SYNC_TOLERANCE_MS (<= 25ms) -> Present
+        assert_eq!(
+            dropper.evaluate_delta_at(0, false, 100, t0),
+            FrameAction::Present
+        );
+        assert_eq!(
+            dropper.evaluate_delta_at(15, false, 100, t0),
+            FrameAction::Present
+        );
+        assert_eq!(
+            dropper.evaluate_delta_at(25, false, 100, t0),
+            FrameAction::Present
+        );
+
+        // 2. Future frame (< -25ms) -> Wait
+        assert_eq!(
+            dropper.evaluate_delta_at(-50, false, 100, t0),
+            FrameAction::Wait { pts_ahead: 50 }
+        );
+
+        // 3. Mild/moderate lag (26ms to 200ms) -> SoftDrop (decoder is NOT disturbed)
+        assert_eq!(
+            dropper.evaluate_delta_at(26, false, 100, t0),
+            FrameAction::SoftDrop
+        );
+        assert_eq!(
+            dropper.evaluate_delta_at(100, false, 100, t0),
+            FrameAction::SoftDrop
+        );
+        assert_eq!(
+            dropper.evaluate_delta_at(180, false, 100, t0),
+            FrameAction::SoftDrop
+        );
+        assert_eq!(
+            dropper.evaluate_delta_at(200, false, 100, t0),
+            FrameAction::SoftDrop
+        );
+
+        // 4. Severe lag (> 200ms) BUT buffer can catch up -> SoftDrop (no decoder seek needed!)
+        assert_eq!(
+            dropper.evaluate_delta_at(250, true, 100, t0),
+            FrameAction::SoftDrop
+        );
+        assert_eq!(
+            dropper.evaluate_delta_at(500, true, 100, t0),
+            FrameAction::SoftDrop
+        );
+
+        // 5. Severe lag (> 200ms) AND buffer cannot catch up -> HardDrop
+        let action = dropper.evaluate_delta_at(250, false, 300, t0);
+        assert_eq!(action, FrameAction::HardDrop { target_pts: 300 });
+        assert!(dropper.is_cooldown_active_at(t0));
+
+        // 6. Cooldown behavior: subsequent severe lag before 500ms cooldown elapses -> SoftDrop (death spiral prevented!)
+        let t_100ms = t0 + Duration::from_millis(100);
+        assert_eq!(
+            dropper.evaluate_delta_at(300, false, 350, t_100ms),
+            FrameAction::SoftDrop
+        );
+
+        let t_499ms = t0 + Duration::from_millis(499);
+        assert_eq!(
+            dropper.evaluate_delta_at(400, false, 450, t_499ms),
+            FrameAction::SoftDrop
+        );
+
+        // 7. Cooldown expiration: at/after 500ms, HardDrop is authorized again
+        let t_500ms = t0 + Duration::from_millis(500);
+        let action_after_cooldown = dropper.evaluate_delta_at(350, false, 500, t_500ms);
+        assert_eq!(
+            action_after_cooldown,
+            FrameAction::HardDrop { target_pts: 500 }
+        );
+    }
+
+    #[test]
+    fn test_frame_dropper_pts_framerate_evaluation() {
+        let dropper = FrameDropper::with_defaults();
+        let fps = 30.0; // 33.33ms per frame
+        let t0 = Instant::now();
+
+        // Frame at PTS 100, Clock at 100 -> delta = 0ms -> Present
+        assert_eq!(
+            dropper.evaluate_pts_at(100, 100, fps, false, t0),
+            FrameAction::Present
+        );
+
+        // Clock at 101 -> delta = 1 frame = 33.3ms (> 25ms, <= 200ms) -> SoftDrop
+        assert_eq!(
+            dropper.evaluate_pts_at(100, 101, fps, false, t0),
+            FrameAction::SoftDrop
+        );
+
+        // Clock at 103 -> delta = 3 frames = 100ms -> SoftDrop
+        assert_eq!(
+            dropper.evaluate_pts_at(100, 103, fps, false, t0),
+            FrameAction::SoftDrop
+        );
+
+        // Clock at 110 -> delta = 10 frames = 333.3ms (> 200ms) with buffer catchup -> SoftDrop
+        assert_eq!(
+            dropper.evaluate_pts_at(100, 110, fps, true, t0),
+            FrameAction::SoftDrop
+        );
+
+        // Clock at 110 without buffer catchup -> HardDrop { target_pts: 110 }
+        assert_eq!(
+            dropper.evaluate_pts_at(100, 110, fps, false, t0),
+            FrameAction::HardDrop { target_pts: 110 }
+        );
+    }
+
+    #[test]
+    fn test_lookahead_ring_buffer_highest_pts_and_can_catch_up() {
+        let buffer = LookaheadRingBuffer::new(8);
+        assert!(buffer.highest_buffered_pts().is_none());
+        assert!(!buffer.can_catch_up(100, 2));
+
+        buffer.push_wait(make_test_frame(10, 2), 0, None).unwrap();
+        buffer.push_wait(make_test_frame(12, 2), 0, None).unwrap();
+        buffer.push_wait(make_test_frame(14, 2), 0, None).unwrap();
+
+        assert_eq!(buffer.highest_buffered_pts(), Some(14));
+        assert!(buffer.can_catch_up(14, 0));
+        assert!(buffer.can_catch_up(15, 2));
+        assert!(!buffer.can_catch_up(20, 2));
     }
 }
 

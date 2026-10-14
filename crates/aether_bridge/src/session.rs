@@ -82,6 +82,7 @@ pub struct PlaybackSession {
 
     decoder_control: Arc<Mutex<DecoderWorkerControl>>,
     decoder_condvar: Arc<Condvar>,
+    pub frame_dropper: FrameDropper,
 }
 
 impl PlaybackSession {
@@ -600,15 +601,26 @@ impl PlaybackSession {
                     }
 
                     match buffer_arc.peek_front_with_successor() {
-                        Some((frame_pts, frame_dur, next_pts)) => {
-                            match FrameDropper::evaluate_with_successor(frame_pts, next_pts, master_pts) {
-                                FrameAction::Drop => {
+                        Some((frame_pts, frame_dur, _next_pts)) => {
+                            let tolerance_pts = ((FrameDropper::SYNC_TOLERANCE_MS as f64 / 1000.0) * clock_fps).round() as i64;
+                            let buffer_can_catch_up = buffer_arc.can_catch_up(master_pts, tolerance_pts);
+
+                            match session.frame_dropper.evaluate_pts(frame_pts, master_pts, clock_fps, buffer_can_catch_up) {
+                                FrameAction::SoftDrop | FrameAction::Drop => {
                                     eprintln!(
-                                        "[DEBUG EMIT] Frame DESCARTADO! frame_pts: {}, next_pts: {:?}, master_pts: {}",
-                                        frame_pts, next_pts, master_pts
+                                        "[DEBUG EMIT] Frame SOFT DROPPED! frame_pts: {}, master_pts: {}",
+                                        frame_pts, master_pts
                                     );
-                                    // A newer frame is already due: skip this one without starving the display.
                                     buffer_arc.drop_front();
+                                    continue;
+                                }
+                                FrameAction::HardDrop { target_pts } => {
+                                    eprintln!(
+                                        "[DEBUG EMIT] Frame HARD DROP! Recovering via .index: target_pts: {}, master_pts: {}",
+                                        target_pts, master_pts
+                                    );
+                                    session.trigger_hard_drop(target_pts);
+                                    thread::sleep(Duration::from_millis(4));
                                     continue;
                                 }
                                 FrameAction::Present => {
@@ -662,6 +674,24 @@ impl PlaybackSession {
                                 session.broadcast_state();
                             } else {
                                 // Buffer underrun: yield briefly for decoder thread
+                                // If master clock ran far ahead (> HARD_DROP_THRESHOLD_MS), trigger HardDrop if cooldown allows
+                                let cur = current_pts.load(Ordering::SeqCst);
+                                let delta_pts = master_pts.saturating_sub(cur);
+                                let delta_ms = if clock_fps > 0.0 {
+                                    ((delta_pts as f64 / clock_fps) * 1000.0).round() as i64
+                                } else {
+                                    0
+                                };
+                                if delta_ms > FrameDropper::HARD_DROP_THRESHOLD_MS as i64 {
+                                    let action = session.frame_dropper.evaluate_delta(delta_ms, false, master_pts);
+                                    if let FrameAction::HardDrop { target_pts } = action {
+                                        eprintln!(
+                                            "[DEBUG EMIT] Starvation HARD DROP! target_pts: {}, master_pts: {}",
+                                            target_pts, master_pts
+                                        );
+                                        session.trigger_hard_drop(target_pts);
+                                    }
+                                }
                                 thread::sleep(Duration::from_millis(2));
                             }
                         }
@@ -789,6 +819,33 @@ impl PlaybackSession {
             0
         };
         self.seek_pts(target_pts)
+    }
+
+    /// Triggers an asynchronous Hard Drop keyframe recovery seek via the decoder worker
+    /// without blocking presentation caller threads.
+    pub fn trigger_hard_drop(&self, target_pts: i64) {
+        if self.worker_shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+        let clamped_pts = target_pts.clamp(0, self.duration_pts);
+        let new_epoch = self.current_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        self.lookahead_buffer.flush_and_set_epoch(new_epoch);
+        self.master_clock.seek(clamped_pts);
+        {
+            let mut ctrl = self.decoder_control.lock().unwrap();
+            if let Some(ref mut pending) = ctrl.pending_seek {
+                pending.target_pts = clamped_pts;
+                pending.epoch = new_epoch;
+            } else {
+                ctrl.pending_seek = Some(PendingSeekRequest {
+                    target_pts: clamped_pts,
+                    epoch: new_epoch,
+                    responders: Vec::new(),
+                });
+            }
+            ctrl.state = DecoderState::Seeking(clamped_pts);
+            self.decoder_condvar.notify_one();
+        }
     }
 
     /// Terminates background threads and frees resources.
@@ -1017,6 +1074,7 @@ impl SessionRegistry {
             last_frame: Mutex::new(initial_frame),
             decoder_control,
             decoder_condvar,
+            frame_dropper: FrameDropper::with_defaults(),
         });
 
         session.start_background_workers();
