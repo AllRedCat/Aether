@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
@@ -8,7 +9,7 @@ use aether_bridge::api::{
     close_preview_session, create_preview_session, extract_single_frame, get_preview_state,
     init_engine, preview_pause, preview_play, preview_seek_pts, preview_seek_seconds,
 };
-use aether_bridge::session::SessionRegistry;
+use aether_bridge::session::{SessionRegistry, TransportState};
 use aether_core::timeline::Rational;
 use aether_media::frame_index::{FrameIndex, FrameIndexEntry};
 
@@ -713,4 +714,147 @@ fn test_seek_coalescing_and_debouncing_rapid_scrubbing() {
     );
 
     close_preview_session(info.session_id).expect("Close");
+}
+
+#[test]
+fn test_preroll_zero_frame_drops_on_playback_start() {
+    let uri = "synthetic://preroll_drop_test?width=128&height=72&fps=30&duration=3.0";
+    let info = create_preview_session(uri.to_string()).expect("Create session");
+    let session = SessionRegistry::global()
+        .get_session(&info.session_id)
+        .expect("Retrieve session");
+
+    // Initially paused
+    assert_eq!(session.transport_state(), TransportState::Paused);
+    assert_eq!(session.dropped_frames(), 0);
+
+    // Concurrent reader thread hammering master_clock lock-free APIs
+    let session_clone = Arc::clone(&session);
+    let stop_reader = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_clone = Arc::clone(&stop_reader);
+    let reader_handle = thread::spawn(move || {
+        let mut count = 0;
+        while !stop_clone.load(std::sync::atomic::Ordering::Relaxed) {
+            let pts = session_clone.master_clock_pts();
+            let micros = session_clone.master_clock_micros();
+            let secs = session_clone.master_clock_seconds();
+            assert!(pts >= 0);
+            assert!(secs >= 0.0);
+            let _ = micros;
+            count += 1;
+            std::hint::spin_loop();
+        }
+        count
+    });
+
+    // Start playback
+    preview_play(info.session_id.clone()).expect("Play");
+
+    // Wait 250ms for preroll warm-up and active frame presentation
+    thread::sleep(Duration::from_millis(250));
+
+    // Verify session transitioned to Playing
+    assert_eq!(
+        session.transport_state(),
+        TransportState::Playing,
+        "Session should be in Playing state"
+    );
+
+    // CRITICAL REQUIREMENT: Zero frames dropped in initial playback moments
+    let dropped = session.dropped_frames();
+    eprintln!(
+        "[TEST LOG] After play warm-up: dropped_frames={}, sequential_frames={}",
+        dropped,
+        session.sequential_frame_count()
+    );
+    assert_eq!(
+        dropped, 0,
+        "Pre-roll must guarantee ZERO frame drops immediately after Play"
+    );
+    assert!(
+        session.sequential_frame_count() > 0,
+        "Sequential frames should be progressing"
+    );
+
+    // Pause and clean up
+    preview_pause(info.session_id.clone()).expect("Pause");
+    assert_eq!(session.transport_state(), TransportState::Paused);
+
+    stop_reader.store(true, std::sync::atomic::Ordering::Relaxed);
+    let total_reads = reader_handle.join().expect("Join lock-free reader");
+    assert!(total_reads > 0, "Lock-free readers should have completed millions of reads without blocking");
+
+    close_preview_session(info.session_id).expect("Close session");
+}
+
+#[test]
+fn test_preroll_seek_transition_short_video() {
+    // Short video: 0.166 seconds at 30 fps = only 5 frames total (< PREROLL_HIGH_WATER_MARK = 8)
+    let uri = "synthetic://short_clip_test?width=64&height=64&fps=30&duration=0.166";
+    let info = create_preview_session(uri.to_string()).expect("Create session");
+    let session = SessionRegistry::global()
+        .get_session(&info.session_id)
+        .expect("Retrieve session");
+
+    // Seek to frame 2
+    let f = preview_seek_pts(info.session_id.clone(), 2).expect("Seek to 2");
+    assert!(f.is_some());
+
+    // Start playback on short video
+    preview_play(info.session_id.clone()).expect("Play");
+
+    // Wait for playback to warm up, play the remaining 3 frames, and hit EOS
+    thread::sleep(Duration::from_millis(250));
+
+    // Zero frames dropped on short clip
+    assert_eq!(
+        session.dropped_frames(),
+        0,
+        "Short video must not drop frames during PreRoll -> Playing"
+    );
+
+    // Ensure session safely reached EOS or is Playing without hanging/deadlock
+    let state = get_preview_state(info.session_id.clone()).expect("Get state");
+    eprintln!(
+        "[TEST LOG] Short video state after play: is_playing={}, current_pts={}/{}",
+        state.is_playing, state.current_pts, state.duration_pts
+    );
+    assert!(state.current_pts >= 2, "Current PTS must have progressed");
+
+    close_preview_session(info.session_id).expect("Close session");
+}
+
+#[test]
+fn test_preroll_during_active_playback_scrub() {
+    let uri = "synthetic://active_scrub_preroll?width=64&height=64&fps=30&duration=5.0";
+    let info = create_preview_session(uri.to_string()).expect("Create session");
+    let session = SessionRegistry::global()
+        .get_session(&info.session_id)
+        .expect("Retrieve session");
+
+    // Start playback
+    preview_play(info.session_id.clone()).expect("Play");
+    thread::sleep(Duration::from_millis(150));
+    assert_eq!(session.transport_state(), TransportState::Playing);
+
+    // Perform seek during active playback
+    let frame_opt = preview_seek_pts(info.session_id.clone(), 60).expect("Seek during playback");
+    assert!(frame_opt.is_some());
+
+    // Wait briefly for PreRoll warm-up at new position and Playing resumption
+    thread::sleep(Duration::from_millis(200));
+
+    assert_eq!(
+        session.transport_state(),
+        TransportState::Playing,
+        "Playback should resume in Playing state after seek"
+    );
+    assert_eq!(
+        session.dropped_frames(),
+        0,
+        "Seeking during playback with PreRoll should not drop frames"
+    );
+
+    preview_pause(info.session_id.clone()).expect("Pause");
+    close_preview_session(info.session_id).expect("Close session");
 }

@@ -2,12 +2,20 @@
 //! for high-performance preview player playback.
 
 use std::collections::VecDeque;
-use std::sync::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Condvar, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use aether_core::timeline::Rational;
 
 use crate::decoder::types::VideoFrame;
+
+static MONOTONIC_CLOCK_BASE: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+#[inline]
+fn now_monotonic_nanos() -> u64 {
+    Instant::now().duration_since(*MONOTONIC_CLOCK_BASE).as_nanos() as u64
+}
 
 /// Default capacity for the lookahead ring buffer (16 decoded RGBA8 frames).
 pub const DEFAULT_LOOKAHEAD_CAPACITY: usize = 16;
@@ -237,19 +245,16 @@ impl LookaheadRingBuffer {
 }
 
 /// Master Clock synchronizing A/V playback against audio stream presentation timestamps,
-/// with high-resolution monotonic system clock fallback.
+/// with high-resolution monotonic system clock fallback and completely lock-free readers.
 #[derive(Debug)]
 pub struct MasterClock {
     timebase: Rational,
-    state: Mutex<ClockInner>,
-}
-
-#[derive(Debug)]
-struct ClockInner {
-    anchor_pts: i64,
-    anchor_instant: Option<Instant>,
-    last_audio_pts: Option<i64>,
-    is_running: bool,
+    anchor_pts: AtomicI64,
+    anchor_nanos: AtomicU64,
+    last_audio_pts: AtomicI64,
+    is_running: AtomicBool,
+    seq: AtomicUsize,
+    writer_mutex: Mutex<()>,
 }
 
 impl MasterClock {
@@ -257,12 +262,12 @@ impl MasterClock {
     pub fn new(timebase: Rational) -> Self {
         Self {
             timebase,
-            state: Mutex::new(ClockInner {
-                anchor_pts: 0,
-                anchor_instant: None,
-                last_audio_pts: None,
-                is_running: false,
-            }),
+            anchor_pts: AtomicI64::new(0),
+            anchor_nanos: AtomicU64::new(0),
+            last_audio_pts: AtomicI64::new(-1),
+            is_running: AtomicBool::new(false),
+            seq: AtomicUsize::new(0),
+            writer_mutex: Mutex::new(()),
         }
     }
 
@@ -284,30 +289,37 @@ impl MasterClock {
 
     /// Starts running the master clock from the specified PTS anchor.
     pub fn start(&self, from_pts: i64) {
-        let mut st = self.state.lock().unwrap();
-        st.anchor_pts = from_pts;
-        st.anchor_instant = Some(Instant::now());
-        st.is_running = true;
+        let _guard = self.writer_mutex.lock().unwrap();
+        let now_nanos = now_monotonic_nanos();
+        self.seq.fetch_add(1, Ordering::Release);
+        self.anchor_pts.store(from_pts, Ordering::Relaxed);
+        self.anchor_nanos.store(now_nanos, Ordering::Relaxed);
+        self.is_running.store(true, Ordering::Relaxed);
+        self.seq.fetch_add(1, Ordering::Release);
     }
 
     /// Pauses the master clock and returns the instantaneous PTS at the time of pause.
     pub fn pause(&self) -> i64 {
-        let mut st = self.state.lock().unwrap();
-        let pts = self.calc_pts(&st);
-        st.anchor_pts = pts;
-        st.anchor_instant = None;
-        st.is_running = false;
+        let _guard = self.writer_mutex.lock().unwrap();
+        let pts = self.current_pts();
+        let now_nanos = now_monotonic_nanos();
+        self.seq.fetch_add(1, Ordering::Release);
+        self.anchor_pts.store(pts, Ordering::Relaxed);
+        self.anchor_nanos.store(now_nanos, Ordering::Relaxed);
+        self.is_running.store(false, Ordering::Relaxed);
+        self.seq.fetch_add(1, Ordering::Release);
         pts
     }
 
     /// Seeks the master clock to a new PTS anchor.
     pub fn seek(&self, target_pts: i64) {
-        let mut st = self.state.lock().unwrap();
-        st.anchor_pts = target_pts;
-        st.last_audio_pts = None;
-        if st.is_running {
-            st.anchor_instant = Some(Instant::now());
-        }
+        let _guard = self.writer_mutex.lock().unwrap();
+        let now_nanos = now_monotonic_nanos();
+        self.seq.fetch_add(1, Ordering::Release);
+        self.anchor_pts.store(target_pts, Ordering::Relaxed);
+        self.anchor_nanos.store(now_nanos, Ordering::Relaxed);
+        self.last_audio_pts.store(-1, Ordering::Relaxed);
+        self.seq.fetch_add(1, Ordering::Release);
     }
 
     /// Updates the master clock with a newly decoded audio buffer presentation timestamp.
@@ -315,35 +327,103 @@ impl MasterClock {
     /// The audio stream acts as the absolute master clock: video presentation synchronizes
     /// to these PTS updates.
     pub fn update_audio_pts(&self, audio_pts: i64) {
-        let mut st = self.state.lock().unwrap();
-        st.last_audio_pts = Some(audio_pts);
-        st.anchor_pts = audio_pts;
-        if st.is_running {
-            st.anchor_instant = Some(Instant::now());
-        }
+        let _guard = self.writer_mutex.lock().unwrap();
+        let now_nanos = now_monotonic_nanos();
+        self.seq.fetch_add(1, Ordering::Release);
+        self.last_audio_pts.store(audio_pts, Ordering::Relaxed);
+        self.anchor_pts.store(audio_pts, Ordering::Relaxed);
+        self.anchor_nanos.store(now_nanos, Ordering::Relaxed);
+        self.seq.fetch_add(1, Ordering::Release);
     }
 
     /// Returns the current instantaneous presentation timestamp according to the master clock.
+    ///
+    /// Fully lock-free: uses atomic sequence counters (SeqLock) without acquiring any Mutex,
+    /// safe for low-latency concurrent readers across presentation, audio, and UI threads.
+    #[inline]
     pub fn current_pts(&self) -> i64 {
-        let st = self.state.lock().unwrap();
-        self.calc_pts(&st)
-    }
+        loop {
+            let s0 = self.seq.load(Ordering::Acquire);
+            if s0 & 1 != 0 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let running = self.is_running.load(Ordering::Relaxed);
+            let pts = self.anchor_pts.load(Ordering::Relaxed);
+            let anchor_nanos = self.anchor_nanos.load(Ordering::Relaxed);
 
-    /// Returns `true` if the clock is actively progressing.
-    pub fn is_running(&self) -> bool {
-        self.state.lock().unwrap().is_running
-    }
-
-    fn calc_pts(&self, st: &ClockInner) -> i64 {
-        if !st.is_running {
-            return st.anchor_pts;
+            std::sync::atomic::fence(Ordering::Acquire);
+            let s1 = self.seq.load(Ordering::Acquire);
+            if s0 == s1 {
+                if !running {
+                    return pts;
+                }
+                let now_nanos = now_monotonic_nanos();
+                let elapsed_nanos = now_nanos.saturating_sub(anchor_nanos);
+                let elapsed_secs = elapsed_nanos as f64 / 1_000_000_000.0;
+                let elapsed_pts = (elapsed_secs * self.fps()).round() as i64;
+                return pts.saturating_add(elapsed_pts);
+            }
         }
-        if let Some(inst) = st.anchor_instant {
-            let elapsed_secs = inst.elapsed().as_secs_f64();
-            let elapsed_pts = (elapsed_secs * self.fps()).round() as i64;
-            st.anchor_pts.saturating_add(elapsed_pts)
+    }
+
+    /// Lock-free current presentation time in nanoseconds.
+    #[inline]
+    pub fn current_nanos(&self) -> u64 {
+        loop {
+            let s0 = self.seq.load(Ordering::Acquire);
+            if s0 & 1 != 0 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let running = self.is_running.load(Ordering::Relaxed);
+            let pts = self.anchor_pts.load(Ordering::Relaxed);
+            let anchor_nanos = self.anchor_nanos.load(Ordering::Relaxed);
+
+            std::sync::atomic::fence(Ordering::Acquire);
+            let s1 = self.seq.load(Ordering::Acquire);
+            if s0 == s1 {
+                let pts_nanos = if self.fps() > 0.0 {
+                    ((pts.max(0) as f64 / self.fps()) * 1_000_000_000.0).round() as u64
+                } else {
+                    0
+                };
+                if !running {
+                    return pts_nanos;
+                }
+                let now_nanos = now_monotonic_nanos();
+                let elapsed_nanos = now_nanos.saturating_sub(anchor_nanos);
+                return pts_nanos.saturating_add(elapsed_nanos);
+            }
+        }
+    }
+
+    /// Lock-free current presentation time in microseconds.
+    #[inline]
+    pub fn current_micros(&self) -> u64 {
+        self.current_nanos() / 1_000
+    }
+
+    /// Lock-free current presentation time in fractional seconds.
+    #[inline]
+    pub fn current_seconds(&self) -> f64 {
+        self.current_nanos() as f64 / 1_000_000_000.0
+    }
+
+    /// Returns `true` if the clock is actively progressing (lock-free).
+    #[inline]
+    pub fn is_running(&self) -> bool {
+        self.is_running.load(Ordering::Acquire)
+    }
+
+    /// Returns the most recent audio PTS update, if any (lock-free).
+    #[inline]
+    pub fn last_audio_pts(&self) -> Option<i64> {
+        let p = self.last_audio_pts.load(Ordering::Acquire);
+        if p >= 0 {
+            Some(p)
         } else {
-            st.anchor_pts
+            None
         }
     }
 }
@@ -965,6 +1045,53 @@ mod tests {
         assert!(buffer.can_catch_up(14, 0));
         assert!(buffer.can_catch_up(15, 2));
         assert!(!buffer.can_catch_up(20, 2));
+    }
+
+    #[test]
+    fn test_master_clock_lock_free_concurrent_readers() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        let clock = Arc::new(MasterClock::new(Rational { num: 60, den: 1 }));
+        clock.start(100);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut readers = Vec::new();
+
+        // Spawn 4 concurrent readers calling lock-free getters
+        for _ in 0..4 {
+            let c = Arc::clone(&clock);
+            let s = Arc::clone(&stop);
+            readers.push(thread::spawn(move || {
+                let mut last_pts = 0;
+                while !s.load(Ordering::Relaxed) {
+                    let pts = c.current_pts();
+                    let micros = c.current_micros();
+                    let nanos = c.current_nanos();
+                    let secs = c.current_seconds();
+                    let _running = c.is_running();
+                    assert!(pts >= 0);
+                    assert!(secs >= 0.0);
+                    let _ = (nanos, micros);
+                    last_pts = pts;
+                    std::hint::spin_loop();
+                }
+                last_pts
+            }));
+        }
+
+        // Writer updates clock concurrently
+        for i in 0..10 {
+            clock.seek(200 + i * 50);
+            clock.update_audio_pts(250 + i * 50);
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        for r in readers {
+            let pts = r.join().unwrap();
+            assert!(pts >= 200);
+        }
     }
 }
 

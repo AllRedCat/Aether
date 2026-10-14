@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -27,6 +27,31 @@ pub enum DecoderState {
     /// Decoder worker is actively streaming sequential frames (linear playback).
     Streaming,
 }
+
+/// Internal states of the playback transport orchestrator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TransportState {
+    /// Playback is paused or idle.
+    Paused = 0,
+    /// Warm-up phase: pre-filling the LookaheadRingBuffer to high-water mark while MasterClock remains frozen.
+    PreRoll = 1,
+    /// Active linear playback: MasterClock is progressing and frames are presented.
+    Playing = 2,
+}
+
+impl From<u8> for TransportState {
+    fn from(val: u8) -> Self {
+        match val {
+            1 => TransportState::PreRoll,
+            2 => TransportState::Playing,
+            _ => TransportState::Paused,
+        }
+    }
+}
+
+/// Minimum high-water mark of frames in lookahead buffer before releasing master clock from PreRoll.
+pub const PREROLL_HIGH_WATER_MARK: usize = 8;
 
 pub struct PendingSeekRequest {
     pub target_pts: i64,
@@ -64,6 +89,7 @@ pub struct PlaybackSession {
     pub media_type: MediaType,
 
     pub is_playing: Arc<AtomicBool>,
+    pub transport_state: Arc<AtomicU8>,
     pub current_pts: Arc<AtomicI64>,
     pub lookahead_buffer: Arc<LookaheadRingBuffer>,
     pub master_clock: Arc<MasterClock>,
@@ -186,6 +212,26 @@ impl PlaybackSession {
         self.decoder_control.lock().unwrap().state
     }
 
+    /// Current transport state of the playback orchestrator.
+    pub fn transport_state(&self) -> TransportState {
+        TransportState::from(self.transport_state.load(Ordering::Acquire))
+    }
+
+    /// Returns the instantaneous master clock PTS (fully lock-free).
+    pub fn master_clock_pts(&self) -> i64 {
+        self.master_clock.current_pts()
+    }
+
+    /// Returns the instantaneous master clock time in microseconds (fully lock-free).
+    pub fn master_clock_micros(&self) -> u64 {
+        self.master_clock.current_micros()
+    }
+
+    /// Returns the instantaneous master clock time in fractional seconds (fully lock-free).
+    pub fn master_clock_seconds(&self) -> f64 {
+        self.master_clock.current_seconds()
+    }
+
     /// Starts sequential playback governed by the master clock.
     pub fn play(self: &Arc<Self>) -> Result<(), String> {
         // If at or beyond EOS, restart from beginning
@@ -199,7 +245,31 @@ impl PlaybackSession {
         }
 
         let cur = self.current_pts.load(Ordering::SeqCst);
-        self.master_clock.start(cur);
+
+        // Pre-roll warm-up check:
+        // If the lookahead buffer already holds enough frames, buffer is full,
+        // or EOS has been reached, begin Playing immediately at the front frame's PTS.
+        // Otherwise, enter PreRoll and keep MasterClock frozen at cur.
+        let buf_len = self.lookahead_buffer.len();
+        let is_warm = buf_len >= PREROLL_HIGH_WATER_MARK
+            || self.lookahead_buffer.is_eos()
+            || self.lookahead_buffer.is_full();
+
+        if is_warm && buf_len > 0 {
+            let start_pts = self
+                .lookahead_buffer
+                .peek_front_with_successor()
+                .map(|(pts, _, _)| pts)
+                .unwrap_or(cur);
+            self.master_clock.start(start_pts);
+            self.transport_state
+                .store(TransportState::Playing as u8, Ordering::Release);
+        } else {
+            self.master_clock.pause();
+            self.master_clock.seek(cur);
+            self.transport_state
+                .store(TransportState::PreRoll as u8, Ordering::Release);
+        }
 
         // Transition decoder worker to Streaming mode for linear playback
         {
@@ -219,6 +289,8 @@ impl PlaybackSession {
     /// Pauses sequential playback without killing background worker threads.
     pub fn pause(&self) -> Result<(), String> {
         self.is_playing.store(false, Ordering::SeqCst);
+        self.transport_state
+            .store(TransportState::Paused as u8, Ordering::Release);
         let paused_pts = self.master_clock.pause();
         self.current_pts
             .store(paused_pts.clamp(0, self.duration_pts), Ordering::SeqCst);
@@ -557,6 +629,7 @@ impl PlaybackSession {
         let buffer_arc = Arc::clone(&self.lookahead_buffer);
         let clock_arc = Arc::clone(&self.master_clock);
         let is_playing = Arc::clone(&self.is_playing);
+        let transport_state = Arc::clone(&self.transport_state);
         let current_pts = Arc::clone(&self.current_pts);
         let shutdown = Arc::clone(&self.worker_shutdown);
         let session_id = self.session_id.clone();
@@ -567,9 +640,11 @@ impl PlaybackSession {
             .name(format!("aether-emit-{}", session_id))
             .spawn(move || {
                 let mut last_state_broadcast = Instant::now();
+                let mut preroll_start = Instant::now();
 
                 while !shutdown.load(Ordering::SeqCst) {
                     if !is_playing.load(Ordering::SeqCst) {
+                        preroll_start = Instant::now();
                         thread::sleep(Duration::from_millis(4));
                         continue;
                     }
@@ -579,24 +654,77 @@ impl PlaybackSession {
                         None => break,
                     };
 
-                    let master_pts = clock_arc.current_pts();
-
-                    // Check for reaching or exceeding EOS
-                    if master_pts >= duration_pts {
-                        current_pts.store(duration_pts, Ordering::SeqCst);
-                        is_playing.store(false, Ordering::SeqCst);
-                        clock_arc.pause();
-                        session.broadcast_state();
-                        continue;
-                    }
+                    let current_transport =
+                        TransportState::from(transport_state.load(Ordering::Acquire));
 
                     if session.media_type == MediaType::Audio {
+                        if current_transport == TransportState::PreRoll {
+                            let cur = current_pts.load(Ordering::SeqCst);
+                            clock_arc.start(cur);
+                            transport_state
+                                .store(TransportState::Playing as u8, Ordering::Release);
+                        }
+                        let master_pts = clock_arc.current_pts();
                         current_pts.store(master_pts, Ordering::SeqCst);
                         if last_state_broadcast.elapsed() >= Duration::from_millis(50) {
                             session.broadcast_state();
                             last_state_broadcast = Instant::now();
                         }
                         thread::sleep(Duration::from_millis(15));
+                        continue;
+                    }
+
+                    // PreRoll Warm-up: keep MasterClock frozen and buffer frames
+                    if current_transport == TransportState::PreRoll {
+                        let buf_len = buffer_arc.len();
+                        let is_eos = buffer_arc.is_eos();
+                        let is_full = buffer_arc.is_full();
+
+                        let is_ready = buf_len >= PREROLL_HIGH_WATER_MARK
+                            || is_eos
+                            || is_full
+                            || (buf_len > 0 && buffer_arc.highest_buffered_pts() >= Some(duration_pts))
+                            || (buf_len > 0 && preroll_start.elapsed() >= Duration::from_millis(300));
+
+                        if is_ready && buf_len > 0 {
+                            if let Some((first_pts, _, _)) = buffer_arc.peek_front_with_successor() {
+                                clock_arc.start(first_pts);
+                                current_pts.store(first_pts, Ordering::SeqCst);
+                                transport_state
+                                    .store(TransportState::Playing as u8, Ordering::Release);
+                                eprintln!(
+                                    "[DEBUG EMIT] PreRoll warm-up complete: buffered {} frames, clock started at PTS {}",
+                                    buf_len, first_pts
+                                );
+                            }
+                        } else if is_eos && buf_len == 0 {
+                            current_pts.store(duration_pts, Ordering::SeqCst);
+                            is_playing.store(false, Ordering::SeqCst);
+                            transport_state
+                                .store(TransportState::Paused as u8, Ordering::Release);
+                            clock_arc.pause();
+                            session.broadcast_state();
+                            continue;
+                        } else {
+                            // Still warming up: do NOT drop frames; yield to decoder
+                            thread::sleep(Duration::from_millis(2));
+                            continue;
+                        }
+                    }
+
+                    // Reset preroll timer once actively playing
+                    preroll_start = Instant::now();
+
+                    let master_pts = clock_arc.current_pts();
+
+                    // Check for reaching or exceeding EOS
+                    if master_pts >= duration_pts {
+                        current_pts.store(duration_pts, Ordering::SeqCst);
+                        is_playing.store(false, Ordering::SeqCst);
+                        transport_state
+                            .store(TransportState::Paused as u8, Ordering::Release);
+                        clock_arc.pause();
+                        session.broadcast_state();
                         continue;
                     }
 
@@ -628,7 +756,9 @@ impl PlaybackSession {
                                     eprintln!("[DEBUG EMIT] Frame APRESENTADO! PTS: {}, master_pts: {}", frame_pts, master_pts);
                                     if let Some(vf) = buffer_arc.pop_front() {
                                         current_pts.store(vf.pts, Ordering::SeqCst);
-                                        clock_arc.seek(vf.pts);
+                                        if clock_arc.last_audio_pts().is_none() {
+                                            clock_arc.seek(vf.pts);
+                                        }
 
                                         let timestamp_seconds = vf.timestamp_seconds();
                                         let bf = BridgeFrame {
@@ -670,6 +800,8 @@ impl PlaybackSession {
                             if buffer_arc.is_eos() {
                                 current_pts.store(duration_pts, Ordering::SeqCst);
                                 is_playing.store(false, Ordering::SeqCst);
+                                transport_state
+                                    .store(TransportState::Paused as u8, Ordering::Release);
                                 clock_arc.pause();
                                 session.broadcast_state();
                             } else {
@@ -768,6 +900,13 @@ impl PlaybackSession {
         } else {
             self.current_pts.store(clamped_pts, Ordering::SeqCst);
         }
+
+        // If playback is actively running, freeze the clock in PreRoll state until the new position is buffered
+        if self.is_playing.load(Ordering::SeqCst) {
+            self.transport_state
+                .store(TransportState::PreRoll as u8, Ordering::Release);
+            self.master_clock.pause();
+        }
         self.master_clock.seek(clamped_pts);
 
         // 3. Queue the seek command with debounce / coalescing
@@ -830,6 +969,11 @@ impl PlaybackSession {
         let clamped_pts = target_pts.clamp(0, self.duration_pts);
         let new_epoch = self.current_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         self.lookahead_buffer.flush_and_set_epoch(new_epoch);
+        if self.is_playing.load(Ordering::SeqCst) {
+            self.transport_state
+                .store(TransportState::PreRoll as u8, Ordering::Release);
+            self.master_clock.pause();
+        }
         self.master_clock.seek(clamped_pts);
         {
             let mut ctrl = self.decoder_control.lock().unwrap();
@@ -1059,6 +1203,7 @@ impl SessionRegistry {
             timebase,
             media_type,
             is_playing: Arc::new(AtomicBool::new(false)),
+            transport_state: Arc::new(AtomicU8::new(TransportState::Paused as u8)),
             current_pts: Arc::new(AtomicI64::new(0)),
             lookahead_buffer,
             master_clock,
