@@ -718,8 +718,9 @@ pub use decoder::{
 };
 pub use frame_index::{
     binary_search_keyframe_at_or_before, binary_search_keyframe_clamped, decode_entries_raw,
-    encode_entries_raw, FrameIndex, FrameIndexEntry, FLAG_IS_DISPOSABLE, FLAG_IS_KEYFRAME,
-    FRAME_INDEX_ENTRY_SIZE, FRAME_INDEX_HEADER_SIZE, FRAME_INDEX_MAGIC, FRAME_INDEX_VERSION,
+    encode_entries_raw, FrameIndex, FrameIndexEntry, MmapFrameIndex, FLAG_IS_DISPOSABLE,
+    FLAG_IS_KEYFRAME, FRAME_INDEX_ENTRY_SIZE, FRAME_INDEX_HEADER_SIZE, FRAME_INDEX_MAGIC,
+    FRAME_INDEX_VERSION,
 };
 pub use importer::{
     build_or_load_frame_index, build_or_load_frame_index_with_timebase, ingest_media_with_cache,

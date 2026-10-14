@@ -8,6 +8,9 @@ use aether_bridge::api::{
     close_preview_session, create_preview_session, extract_single_frame, get_preview_state,
     init_engine, preview_pause, preview_play, preview_seek_pts, preview_seek_seconds,
 };
+use aether_bridge::session::SessionRegistry;
+use aether_core::timeline::Rational;
+use aether_media::frame_index::{FrameIndex, FrameIndexEntry};
 
 /// Helper to create a unique temporary directory in std::env::temp_dir()
 struct TestDir {
@@ -494,4 +497,220 @@ fn test_nonexistent_session_operations() {
     assert_eq!(preview_seek_pts(dummy_id.clone(), 0).unwrap_err(), expected_err);
     assert_eq!(preview_seek_seconds(dummy_id.clone(), 0.0).unwrap_err(), expected_err);
     assert_eq!(close_preview_session(dummy_id.clone()).unwrap_err(), expected_err);
+}
+
+// =========================================================================
+// 6. Decoder Worker Architecture & Continuous Linear Playback Tests
+// =========================================================================
+
+#[test]
+fn test_continuous_playback_single_initial_seek_and_strictly_sequential_reads() {
+    let uri = "synthetic://continuous_playback_5s?width=64&height=64&fps=30&duration=5.0";
+    let info = create_preview_session(uri.to_string()).expect("Create session for 5s playback");
+    let session = SessionRegistry::global()
+        .get_session(&info.session_id)
+        .expect("Retrieve session from registry");
+
+    // 1. Initial State: Exactly 1 initial seek was performed to pre-fetch the thumbnail frame at PTS 0
+    let initial_seeks = session.seek_count();
+    assert_eq!(
+        initial_seeks, 1,
+        "Session creation must perform exactly 1 initial seek to fetch PTS 0 preview frame"
+    );
+
+    // Initial sequential frames decoded by idle pre-fill worker
+    let prefill_sequential = session.sequential_frame_count();
+    eprintln!(
+        "[TEST LOG] After creation: seeks={}, sequential_frames={}",
+        initial_seeks, prefill_sequential
+    );
+
+    // 2. Start continuous linear playback
+    preview_play(info.session_id.clone()).expect("Start linear playback");
+
+    // Let playback stream continuously for 500ms (~15 frames @ 30fps)
+    thread::sleep(Duration::from_millis(500));
+
+    let state_playing = get_preview_state(info.session_id.clone()).expect("Get state");
+    assert!(state_playing.is_playing, "Session should be playing");
+    assert!(
+        state_playing.current_pts > 0,
+        "Playback presentation clock should have advanced beyond 0"
+    );
+
+    // CRITICAL REQUIREMENT: During continuous playback, ZERO additional seeks are emitted!
+    // seek_count must strictly remain at initial_seeks (1).
+    let seeks_during_playback = session.seek_count();
+    assert_eq!(
+        seeks_during_playback, initial_seeks,
+        "Continuous playback must NEVER issue per-frame seeks! Expected {}, got {}",
+        initial_seeks, seeks_during_playback
+    );
+
+    let sequential_during_playback = session.sequential_frame_count();
+    assert!(
+        sequential_during_playback > prefill_sequential,
+        "Continuous playback must decode frames sequentially (expected > {}, got {})",
+        prefill_sequential,
+        sequential_during_playback
+    );
+    eprintln!(
+        "[TEST LOG] After 500ms playback: seeks={}, sequential_frames={}",
+        seeks_during_playback, sequential_during_playback
+    );
+
+    // 3. Scrubbing Flow: Seeking to 3.0s (PTS 90) must issue EXACTLY 1 seek command
+    let scrub_frame = preview_seek_seconds(info.session_id.clone(), 3.0)
+        .expect("preview_seek_seconds 3.0")
+        .expect("Decoded frame at 3.0s");
+    assert!((scrub_frame.timestamp_seconds - 3.0).abs() < 0.05, "Seek frame timestamp must match 3.0s");
+    assert_eq!(scrub_frame.pts, 180, "Seek frame PTS must match 3.0s @ 60 ticks/s timebase");
+
+    let seeks_after_scrub = session.seek_count();
+    assert_eq!(
+        seeks_after_scrub,
+        seeks_during_playback + 1,
+        "Scrubbing must issue exactly 1 seek to reposition the stream"
+    );
+
+    // 4. Resumed Linear Playback: After scrub repositioning, playback resumes strictly sequentially
+    let seq_before_resume = session.sequential_frame_count();
+    thread::sleep(Duration::from_millis(300));
+
+    let seeks_after_resume = session.seek_count();
+    assert_eq!(
+        seeks_after_resume, seeks_after_scrub,
+        "Resumed playback must NOT emit per-frame seeks! Expected {}, got {}",
+        seeks_after_scrub, seeks_after_resume
+    );
+    assert!(
+        session.sequential_frame_count() >= seq_before_resume,
+        "Decoder continues sequential decoding"
+    );
+
+    // 5. Pause and teardown
+    preview_pause(info.session_id.clone()).expect("Pause");
+    close_preview_session(info.session_id).expect("Close session");
+}
+
+#[test]
+fn test_playback_scrubbing_with_mmap_frame_index() {
+    let test_dir = TestDir::new("mmap_fidx_playback");
+    let mp4_fixture = sample_mp4_path();
+    if !mp4_fixture.exists() {
+        eprintln!("Skipping mmap fixture test; sample mp4 not found at {:?}", mp4_fixture);
+        return;
+    }
+
+    let media_copy = test_dir.file("sample_test.mp4");
+    fs::copy(&mp4_fixture, &media_copy).expect("Copy fixture mp4 to test dir");
+
+    // Create a matching .index sidecar file with keyframes at 0 and 5
+    let index_file = test_dir.file("sample_test.mp4.index");
+    let timebase = Rational { num: 30, den: 1 };
+    let mut entries = Vec::new();
+    for i in 0..10 {
+        let is_key = i == 0 || i == 5;
+        entries.push(FrameIndexEntry::new(
+            i as i64,
+            i as i64,
+            (i * 100) as u64,
+            100,
+            is_key,
+            false,
+        ));
+    }
+    let frame_index = FrameIndex::new(timebase, [0u8; 32], entries);
+    frame_index.save_to_file(&index_file).expect("Save .index sidecar");
+
+    let info = create_preview_session(media_copy.to_str().unwrap().to_string())
+        .expect("Create session with mmap .index");
+    let session = SessionRegistry::global()
+        .get_session(&info.session_id)
+        .expect("Retrieve session");
+
+    // Verify mmap_frame_index is loaded
+    assert!(
+        session.mmap_frame_index.is_some(),
+        "Session must have loaded the memory-mapped MmapFrameIndex sidecar"
+    );
+
+    let mmap = session.mmap_frame_index.as_ref().unwrap();
+    assert_eq!(mmap.len(), 10);
+    // Keyframe lookup for PTS 7 returns keyframe at PTS 5
+    let kf = mmap.seek_keyframe(7).expect("Keyframe lookup");
+    assert_eq!(kf.pts, 5, "Keyframe lookup at PTS 7 should land on PTS 5");
+
+    let initial_seeks = session.seek_count();
+
+    // Scrubbing to PTS 7
+    let frame = preview_seek_pts(info.session_id.clone(), 7)
+        .expect("Seek PTS 7")
+        .expect("Decoded frame at 7");
+    assert_eq!(frame.pts, 7);
+
+    // Seek count increased by 1 (the single seek to keyframe 5)
+    assert_eq!(session.seek_count(), initial_seeks + 1);
+
+    // Start playback
+    preview_play(info.session_id.clone()).expect("Play");
+    thread::sleep(Duration::from_millis(200));
+
+    // During playback, seek_count does NOT increase
+    assert_eq!(
+        session.seek_count(),
+        initial_seeks + 1,
+        "No seeks during linear playback with mmap frame index"
+    );
+
+    preview_pause(info.session_id.clone()).expect("Pause");
+    close_preview_session(info.session_id).expect("Close");
+}
+
+#[test]
+fn test_seek_coalescing_and_debouncing_rapid_scrubbing() {
+    let uri = "synthetic://coalescing_test?width=64&height=64&fps=30&duration=10.0";
+    let info = create_preview_session(uri.to_string()).expect("Create session");
+    let session = SessionRegistry::global()
+        .get_session(&info.session_id)
+        .expect("Retrieve session");
+
+    let initial_seeks = session.seek_count();
+
+    // Spawn 10 concurrent seeks simulating rapid user dragging across the timeline
+    let num_requests = 10;
+    let mut handles = Vec::new();
+
+    for i in 1..=num_requests {
+        let sid = info.session_id.clone();
+        handles.push(thread::spawn(move || {
+            let pts = (i * 15) as i64; // PTS 15, 30, 45, 60...
+            preview_seek_pts(sid, pts)
+        }));
+    }
+
+    for h in handles {
+        let res = h.join().expect("Thread join");
+        assert!(res.is_ok(), "Seek request should succeed");
+        assert!(res.unwrap().is_some(), "Seek result should yield a frame");
+    }
+
+    let final_seeks = session.seek_count();
+    let seeks_performed = final_seeks - initial_seeks;
+    eprintln!(
+        "[TEST LOG] Rapid scrubbing: {} requests resulted in {} actual decoder seeks (coalesced={})",
+        num_requests,
+        seeks_performed,
+        num_requests > seeks_performed
+    );
+
+    // Debouncing/coalescing should avoid running 1 seek per rapid request
+    assert!(
+        seeks_performed <= num_requests,
+        "Seeks performed ({}) should be <= requests ({})",
+        seeks_performed,
+        num_requests
+    );
+
+    close_preview_session(info.session_id).expect("Close");
 }

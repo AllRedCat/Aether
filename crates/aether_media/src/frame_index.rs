@@ -456,6 +456,13 @@ impl FrameIndex {
         if !path.exists() {
             return Err(MediaError::FileNotFound(path.display().to_string()));
         }
+        if let Ok(mmap_idx) = MmapFrameIndex::open(path) {
+            return Ok(Self::new(
+                mmap_idx.timebase,
+                mmap_idx.source_digest,
+                mmap_idx.entries().to_vec(),
+            ));
+        }
         let mut f = File::open(path).map_err(|e| MediaError::IoError(e.to_string()))?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)
@@ -476,6 +483,238 @@ impl FrameIndex {
             ));
         }
         Ok(idx)
+    }
+}
+
+/// OS-level memory-mapped buffer wrapper for high-performance zero-copy index access.
+#[cfg(unix)]
+pub struct MmapHandle {
+    ptr: *mut u8,
+    len: usize,
+}
+
+#[cfg(unix)]
+impl MmapHandle {
+    pub fn open(path: &Path) -> Result<Self, MediaError> {
+        use std::os::unix::io::AsRawFd;
+        let file = File::open(path).map_err(|e| MediaError::IoError(e.to_string()))?;
+        let meta = file.metadata().map_err(|e| MediaError::IoError(e.to_string()))?;
+        let len = meta.len() as usize;
+        if len < FRAME_INDEX_HEADER_SIZE {
+            return Err(MediaError::CorruptFile(format!(
+                "Frame index file too small ({} bytes < {} header bytes)",
+                len, FRAME_INDEX_HEADER_SIZE
+            )));
+        }
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            return Err(MediaError::IoError(std::io::Error::last_os_error().to_string()));
+        }
+        Ok(Self {
+            ptr: ptr as *mut u8,
+            len,
+        })
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for MmapHandle {
+    fn drop(&mut self) {
+        unsafe {
+            libc::munmap(self.ptr as *mut libc::c_void, self.len);
+        }
+    }
+}
+
+#[cfg(unix)]
+unsafe impl Send for MmapHandle {}
+#[cfg(unix)]
+unsafe impl Sync for MmapHandle {}
+
+#[cfg(not(unix))]
+pub struct MmapHandle {
+    buf: Vec<u8>,
+}
+
+#[cfg(not(unix))]
+impl MmapHandle {
+    pub fn open(path: &Path) -> Result<Self, MediaError> {
+        let mut f = File::open(path).map_err(|e| MediaError::IoError(e.to_string()))?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf).map_err(|e| MediaError::IoError(e.to_string()))?;
+        if buf.len() < FRAME_INDEX_HEADER_SIZE {
+            return Err(MediaError::CorruptFile(format!(
+                "Frame index file too small ({} bytes < {} header bytes)",
+                buf.len(), FRAME_INDEX_HEADER_SIZE
+            )));
+        }
+        Ok(Self { buf })
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buf
+    }
+}
+
+/// Zero-copy, memory-mapped representation of a contiguous binary `.index` sidecar file.
+///
+/// Directly maps `FrameIndexEntry` records into memory for $O(1)$ startup allocation and
+/// $O(\log N)$ timeline scrubbing without reading entire index tables into heap memory.
+pub struct MmapFrameIndex {
+    handle: MmapHandle,
+    pub timebase: Rational,
+    pub source_digest: [u8; 32],
+    entry_count: usize,
+}
+
+impl MmapFrameIndex {
+    /// Opens and memory-maps the binary `.index` file at `path`.
+    pub fn open(path: &Path) -> Result<Self, MediaError> {
+        if !path.exists() {
+            return Err(MediaError::FileNotFound(path.display().to_string()));
+        }
+        let handle = MmapHandle::open(path)?;
+        let bytes = handle.as_slice();
+
+        if bytes.len() < FRAME_INDEX_HEADER_SIZE {
+            return Err(MediaError::CorruptFile(format!(
+                "Frame index file too small ({} bytes < {} header bytes)",
+                bytes.len(),
+                FRAME_INDEX_HEADER_SIZE
+            )));
+        }
+
+        if &bytes[0..8] != FRAME_INDEX_MAGIC && &bytes[0..8] != b"AETHINDX" {
+            return Err(MediaError::CorruptFile(
+                "Invalid frame index magic header".to_string(),
+            ));
+        }
+
+        let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        if version != FRAME_INDEX_VERSION {
+            return Err(MediaError::CorruptFile(format!(
+                "Unsupported frame index version: {} (expected {})",
+                version, FRAME_INDEX_VERSION
+            )));
+        }
+
+        let tb_num = i32::from_le_bytes(bytes[12..16].try_into().unwrap());
+        let tb_den = i32::from_le_bytes(bytes[16..20].try_into().unwrap());
+        if tb_num <= 0 || tb_den <= 0 {
+            return Err(MediaError::CorruptFile(format!(
+                "Invalid timebase in frame index header: {}/{}",
+                tb_num, tb_den
+            )));
+        }
+
+        let entry_count = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
+        if entry_count > MAX_FRAME_INDEX_ENTRIES {
+            return Err(MediaError::CorruptFile(format!(
+                "Frame index entry count ({}) exceeds safety limit",
+                entry_count
+            )));
+        }
+
+        let mut source_digest = [0u8; 32];
+        source_digest.copy_from_slice(&bytes[32..64]);
+
+        let payload = &bytes[FRAME_INDEX_HEADER_SIZE..];
+        let expected_payload_bytes = (entry_count as usize)
+            .checked_mul(FRAME_INDEX_ENTRY_SIZE)
+            .ok_or_else(|| MediaError::CorruptFile("Frame index size overflow".to_string()))?;
+
+        if payload.len() != expected_payload_bytes {
+            return Err(MediaError::CorruptFile(format!(
+                "Frame index payload truncated or mismatched: expected {} bytes for {} entries, got {} bytes",
+                expected_payload_bytes,
+                entry_count,
+                payload.len()
+            )));
+        }
+
+        Ok(Self {
+            handle,
+            timebase: Rational {
+                num: tb_num,
+                den: tb_den,
+            },
+            source_digest,
+            entry_count: entry_count as usize,
+        })
+    }
+
+    /// Opens and memory-maps the binary `.index` file, asserting digest validation.
+    pub fn open_validated(path: &Path, expected_digest: &[u8; 32]) -> Result<Self, MediaError> {
+        let idx = Self::open(path)?;
+        if &idx.source_digest != expected_digest {
+            return Err(MediaError::CorruptFile(
+                "Frame index digest does not match source media fingerprint".to_string(),
+            ));
+        }
+        Ok(idx)
+    }
+
+    /// Direct zero-copy slice of all [`FrameIndexEntry`] records in presentation order.
+    #[inline]
+    pub fn entries(&self) -> &[FrameIndexEntry] {
+        let payload = &self.handle.as_slice()[FRAME_INDEX_HEADER_SIZE..];
+        unsafe {
+            std::slice::from_raw_parts(
+                payload.as_ptr() as *const FrameIndexEntry,
+                self.entry_count,
+            )
+        }
+    }
+
+    /// Number of indexed packets.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.entry_count
+    }
+
+    /// Returns `true` if the index contains zero packets.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entry_count == 0
+    }
+
+    /// Strict $O(\log N)$ binary search over the memory-mapped index: returns the
+    /// keyframe with the greatest `pts <= target_pts`.
+    pub fn find_keyframe_at_or_before(&self, target_pts: i64) -> Option<&FrameIndexEntry> {
+        binary_search_keyframe_at_or_before(self.entries(), target_pts).map(|(_, e)| e)
+    }
+
+    /// Boundary-tolerant $O(\log N)$ keyframe search over memory-mapped index.
+    pub fn seek_keyframe(&self, target_pts: i64) -> Option<&FrameIndexEntry> {
+        binary_search_keyframe_clamped(self.entries(), target_pts).map(|(_, e)| e)
+    }
+
+    /// Binary search over all packets (I, P, B) returning frame with greatest `pts <= target_pts`.
+    pub fn find_frame_at_or_before(&self, target_pts: i64) -> Option<&FrameIndexEntry> {
+        let entries = self.entries();
+        if entries.is_empty() {
+            return None;
+        }
+        let upper = entries.partition_point(|e| e.pts <= target_pts);
+        if upper == 0 {
+            return None;
+        }
+        Some(&entries[upper - 1])
     }
 }
 
@@ -701,6 +940,31 @@ mod tests {
             "Keyframe lookup took {:?} (>= 5ms budget)",
             elapsed
         );
+    }
+
+    #[test]
+    fn test_mmap_frame_index_zero_copy_seeking() {
+        let entries = sample_gop_entries();
+        let idx = FrameIndex::new(Rational { num: 60, den: 1 }, [0xCC; 32], entries);
+
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let index_path = temp_dir.path().join("sample.index");
+        idx.save_to_file(&index_path).expect("save_to_file");
+
+        let mmap_idx = MmapFrameIndex::open(&index_path).expect("MmapFrameIndex::open");
+        assert_eq!(mmap_idx.len(), 10);
+        assert_eq!(mmap_idx.timebase, Rational { num: 60, den: 1 });
+        assert_eq!(mmap_idx.source_digest, [0xCC; 32]);
+
+        // Keyframe lookups match
+        assert_eq!(mmap_idx.find_keyframe_at_or_before(0).unwrap().pts, 0);
+        assert_eq!(mmap_idx.find_keyframe_at_or_before(4).unwrap().pts, 0);
+        assert_eq!(mmap_idx.find_keyframe_at_or_before(5).unwrap().pts, 5);
+        assert_eq!(mmap_idx.find_keyframe_at_or_before(8).unwrap().pts, 5);
+
+        // Clamped lookups
+        assert_eq!(mmap_idx.seek_keyframe(-10).unwrap().pts, 0);
+        assert_eq!(mmap_idx.seek_keyframe(100).unwrap().pts, 5);
     }
 }
 

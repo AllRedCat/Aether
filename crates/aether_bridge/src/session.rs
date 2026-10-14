@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -12,9 +12,34 @@ use aether_media::frame_index::FrameIndex;
 use aether_media::playback::{
     FrameAction, FrameDropper, LookaheadRingBuffer, MasterClock, DEFAULT_LOOKAHEAD_CAPACITY,
 };
+use aether_media::MmapFrameIndex;
 
 use crate::api::{BridgeFrame, PlaybackState, PreviewSessionInfo};
 pub use crate::frb_generated::StreamSink;
+
+/// Internal states of the video decoding worker distinguishing idle, scrubbing, and linear playback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecoderState {
+    /// Decoder worker is idle or paused.
+    Idle,
+    /// Decoder worker is seeking / scrubbing to target timestamp.
+    Seeking(i64),
+    /// Decoder worker is actively streaming sequential frames (linear playback).
+    Streaming,
+}
+
+pub struct PendingSeekRequest {
+    pub target_pts: i64,
+    pub epoch: u64,
+    pub responders: Vec<std::sync::mpsc::SyncSender<Result<Option<BridgeFrame>, String>>>,
+}
+
+pub struct DecoderWorkerControl {
+    pub state: DecoderState,
+    pub pending_seek: Option<PendingSeekRequest>,
+    pub play_pending: bool,
+    pub pause_pending: bool,
+}
 
 /// Status emitted during sequential playback ticker execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +68,10 @@ pub struct PlaybackSession {
     pub lookahead_buffer: Arc<LookaheadRingBuffer>,
     pub master_clock: Arc<MasterClock>,
     pub frame_index: Option<Arc<FrameIndex>>,
+    pub mmap_frame_index: Option<Arc<MmapFrameIndex>>,
+
+    pub seek_count: Arc<AtomicUsize>,
+    pub sequential_frame_count: Arc<AtomicUsize>,
 
     current_epoch: AtomicU64,
     worker_shutdown: Arc<AtomicBool>,
@@ -50,6 +79,9 @@ pub struct PlaybackSession {
     frame_sinks: Mutex<Vec<StreamSink<BridgeFrame>>>,
     state_sinks: Mutex<Vec<StreamSink<PlaybackState>>>,
     last_frame: Mutex<Option<BridgeFrame>>,
+
+    decoder_control: Arc<Mutex<DecoderWorkerControl>>,
+    decoder_condvar: Arc<Condvar>,
 }
 
 impl PlaybackSession {
@@ -138,6 +170,21 @@ impl PlaybackSession {
         }
     }
 
+    /// Total count of decoder seeks performed during the session lifecycle.
+    pub fn seek_count(&self) -> usize {
+        self.seek_count.load(Ordering::SeqCst)
+    }
+
+    /// Total count of sequential frames decoded without seeks.
+    pub fn sequential_frame_count(&self) -> usize {
+        self.sequential_frame_count.load(Ordering::SeqCst)
+    }
+
+    /// Current state of the decoder worker.
+    pub fn decoder_state(&self) -> DecoderState {
+        self.decoder_control.lock().unwrap().state
+    }
+
     /// Starts sequential playback governed by the master clock.
     pub fn play(self: &Arc<Self>) -> Result<(), String> {
         // If at or beyond EOS, restart from beginning
@@ -152,6 +199,18 @@ impl PlaybackSession {
 
         let cur = self.current_pts.load(Ordering::SeqCst);
         self.master_clock.start(cur);
+
+        // Transition decoder worker to Streaming mode for linear playback
+        {
+            let mut ctrl = self.decoder_control.lock().unwrap();
+            ctrl.play_pending = true;
+            ctrl.pause_pending = false;
+            if !matches!(ctrl.state, DecoderState::Seeking(_)) {
+                ctrl.state = DecoderState::Streaming;
+            }
+            self.decoder_condvar.notify_one();
+        }
+
         self.broadcast_state();
         Ok(())
     }
@@ -162,6 +221,18 @@ impl PlaybackSession {
         let paused_pts = self.master_clock.pause();
         self.current_pts
             .store(paused_pts.clamp(0, self.duration_pts), Ordering::SeqCst);
+
+        // Transition decoder worker to Idle / Paused
+        {
+            let mut ctrl = self.decoder_control.lock().unwrap();
+            ctrl.pause_pending = true;
+            ctrl.play_pending = false;
+            if matches!(ctrl.state, DecoderState::Streaming) {
+                ctrl.state = DecoderState::Idle;
+            }
+            self.decoder_condvar.notify_one();
+        }
+
         self.broadcast_state();
         Ok(())
     }
@@ -172,69 +243,307 @@ impl PlaybackSession {
         self.spawn_emitter_worker();
     }
 
-    /// Background thread: continuously decodes frames ahead of the playhead,
-    /// populating the lookahead ring buffer up to capacity.
+    /// Background thread: state machine managing Idle, Seeking (Scrubbing with debouncing/coalescing),
+    /// and Streaming (Linear Playback with strictly continuous sequential packet/frame reading).
     fn spawn_decoder_worker(self: &Arc<Self>) {
         let decoder_arc = Arc::clone(&self.decoder);
         let buffer_arc = Arc::clone(&self.lookahead_buffer);
         let shutdown = Arc::clone(&self.worker_shutdown);
+        let control_arc = Arc::clone(&self.decoder_control);
+        let condvar_arc = Arc::clone(&self.decoder_condvar);
+        let is_playing = Arc::clone(&self.is_playing);
+        let current_pts = Arc::clone(&self.current_pts);
+        let seek_count = Arc::clone(&self.seek_count);
+        let seq_count = Arc::clone(&self.sequential_frame_count);
+        let mmap_fidx = self.mmap_frame_index.clone();
+        let fidx = self.frame_index.clone();
+        let session_weak = Arc::downgrade(self);
         let session_id = self.session_id.clone();
+        let duration_pts = self.duration_pts;
 
         let _ = thread::Builder::new()
             .name(format!("aether-dec-{}", session_id))
             .spawn(move || {
                 while !shutdown.load(Ordering::SeqCst) {
-                    let epoch = buffer_arc.current_epoch();
-
-                    // If buffer is full or EOS reached for this epoch, sleep briefly
-                    if buffer_arc.is_full() || buffer_arc.is_eos() {
-                        thread::sleep(Duration::from_millis(4));
-                        continue;
-                    }
-
-                    // Try acquiring decoder lock without blocking any in-flight seeks
-                    let mut dec_guard = match decoder_arc.try_lock() {
-                        Ok(g) => g,
-                        Err(std::sync::TryLockError::WouldBlock) => {
-                            thread::sleep(Duration::from_millis(2));
-                            continue;
+                    // Check if a seek command is queued or state transition requested
+                    let maybe_seek = {
+                        let mut ctrl = control_arc.lock().unwrap();
+                        if let Some(seek) = ctrl.pending_seek.take() {
+                            ctrl.state = DecoderState::Seeking(seek.target_pts);
+                            Some(seek)
+                        } else {
+                            if ctrl.play_pending {
+                                ctrl.play_pending = false;
+                                ctrl.state = DecoderState::Streaming;
+                            } else if ctrl.pause_pending {
+                                ctrl.pause_pending = false;
+                                ctrl.state = DecoderState::Idle;
+                            }
+                            None
                         }
-                        Err(std::sync::TryLockError::Poisoned(_)) => break,
                     };
 
-                    // Check if seek epoch changed while acquiring lock
-                    if buffer_arc.current_epoch() != epoch {
+                    // =========================================================
+                    // 1. FLUXO DE SEEKING (Scrubbing / Random Access)
+                    // =========================================================
+                    if let Some(mut seek_req) = maybe_seek {
+                        let mut target_pts = seek_req.target_pts.clamp(0, duration_pts);
+
+                        // Coalescing check: if another seek arrived while taking the lock
+                        {
+                            let mut ctrl = control_arc.lock().unwrap();
+                            if let Some(mut newer) = ctrl.pending_seek.take() {
+                                seek_req.responders.append(&mut newer.responders);
+                                target_pts = newer.target_pts.clamp(0, duration_pts);
+                                ctrl.state = DecoderState::Seeking(target_pts);
+                            }
+                        }
+
+                        // Query .index mapped via mmap for the nearest keyframe at or before target_pts
+                        let keyframe_pts = if let Some(ref m_idx) = mmap_fidx {
+                            m_idx.seek_keyframe(target_pts).map(|kf| kf.pts).unwrap_or(target_pts)
+                        } else if let Some(ref idx) = fidx {
+                            idx.seek_keyframe(target_pts).map(|kf| kf.pts).unwrap_or(target_pts)
+                        } else {
+                            target_pts
+                        };
+
+                        let seeks = seek_count.fetch_add(1, Ordering::SeqCst) + 1;
+                        eprintln!(
+                            "[DEBUG DEC] [Seeking] Seek command executed: target_pts={}, keyframe_pts={} (total_seeks={})",
+                            target_pts, keyframe_pts, seeks
+                        );
+
+                        let mut dec = match decoder_arc.lock() {
+                            Ok(g) => g,
+                            Err(_) => break,
+                        };
+
+                        // Issue 1 seek command on container / decoder
+                        let seek_res = dec.seek_pts(keyframe_pts);
+                        if let Err(e) = seek_res {
+                            eprintln!("[DEBUG DEC] Seek error: {:?}", e);
+                            let err_msg = e.to_string();
+                            for r in seek_req.responders {
+                                let _ = r.send(Err(err_msg.clone()));
+                            }
+                            continue;
+                        }
+
+                        // Advance discarding intermediate frames until target_pts
+                        let mut target_frame = None;
+                        if dec.video().is_some() {
+                            while let Ok(Some(mut vf)) = dec.next_video_frame() {
+                                // While advancing, check if a newer seek request arrived (coalesce/debounce)!
+                                let has_newer = {
+                                    let mut ctrl = control_arc.lock().unwrap();
+                                    if let Some(mut newer) = ctrl.pending_seek.take() {
+                                        seek_req.responders.append(&mut newer.responders);
+                                        target_pts = newer.target_pts.clamp(0, duration_pts);
+                                        ctrl.state = DecoderState::Seeking(target_pts);
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                };
+
+                                if has_newer {
+                                    let newer_kf = if let Some(ref m_idx) = mmap_fidx {
+                                        m_idx.seek_keyframe(target_pts).map(|kf| kf.pts).unwrap_or(target_pts)
+                                    } else if let Some(ref idx) = fidx {
+                                        idx.seek_keyframe(target_pts).map(|kf| kf.pts).unwrap_or(target_pts)
+                                    } else {
+                                        target_pts
+                                    };
+                                    if newer_kf != keyframe_pts {
+                                        let seeks = seek_count.fetch_add(1, Ordering::SeqCst) + 1;
+                                        eprintln!(
+                                            "[DEBUG DEC] [Seeking Coalesced] Seek to newer keyframe_pts={} (total_seeks={})",
+                                            newer_kf, seeks
+                                        );
+                                        let _ = dec.seek_pts(newer_kf);
+                                    }
+                                    continue;
+                                }
+
+                                let pts = vf.pts;
+                                vf.ensure_rgba8();
+                                target_frame = Some(vf);
+                                if pts >= target_pts {
+                                    break;
+                                }
+                            }
+
+                            if target_frame.is_none() && keyframe_pts != target_pts {
+                                let _ = dec.seek_pts(target_pts);
+                                if let Ok(Some(mut vf)) = dec.next_video_frame() {
+                                    vf.ensure_rgba8();
+                                    target_frame = Some(vf);
+                                }
+                            }
+                        }
+
+                        drop(dec);
+
+                        let bridge_frame = if let Some(vf) = target_frame {
+                            if target_pts > 0 && target_pts < duration_pts {
+                                current_pts.store(vf.pts, Ordering::SeqCst);
+                            }
+                            let timestamp_seconds = vf.timestamp_seconds();
+                            let bf = BridgeFrame {
+                                width: vf.width,
+                                height: vf.height,
+                                pts: vf.pts,
+                                duration_pts: vf.duration_pts,
+                                rgba_bytes: vf.data,
+                                row_stride_bytes: vf.row_stride_bytes,
+                                timestamp_seconds,
+                            };
+                            if let Some(session) = session_weak.upgrade() {
+                                if let Ok(mut last) = session.last_frame.lock() {
+                                    *last = Some(bf.clone());
+                                }
+                                session.broadcast_frame(&bf);
+                                session.broadcast_state();
+                            }
+                            Some(bf)
+                        } else {
+                            None
+                        };
+
+                        // Deliver result frame to all waiting callers
+                        for r in seek_req.responders {
+                            let _ = r.send(Ok(bridge_frame.clone()));
+                        }
+
+                        // Transition state after seek:
+                        {
+                            let mut ctrl = control_arc.lock().unwrap();
+                            if ctrl.pending_seek.is_some() {
+                                continue;
+                            } else if is_playing.load(Ordering::SeqCst) {
+                                eprintln!("[DEBUG DEC] State changed: Seeking -> Streaming");
+                                ctrl.state = DecoderState::Streaming;
+                            } else {
+                                eprintln!("[DEBUG DEC] State changed: Seeking -> Idle");
+                                ctrl.state = DecoderState::Idle;
+                            }
+                        }
                         continue;
                     }
 
-                    if dec_guard.video().is_some() {
-                        let decode_res = dec_guard.next_video_frame();
-                        // Drop lock immediately before RGBA conversion and buffer wait!
-                        drop(dec_guard);
+                    // Get current state
+                    let current_state = {
+                        control_arc.lock().unwrap().state
+                    };
 
-                        match decode_res {
-                            Ok(Some(mut vf)) => {
-                                eprintln!("[DEBUG DEC] Quadro decodificado com sucesso! PTS: {}", vf.pts);
+                    // =========================================================
+                    // 2. FLUXO DE STREAMING (Linear Playback)
+                    // =========================================================
+                    if current_state == DecoderState::Streaming {
+                        // In Streaming state, per-frame seeks are strictly prohibited.
+                        let epoch = buffer_arc.current_epoch();
+
+                        if buffer_arc.is_full() || buffer_arc.is_eos() {
+                            thread::sleep(Duration::from_millis(4));
+                            continue;
+                        }
+
+                        let mut dec = match decoder_arc.try_lock() {
+                            Ok(g) => g,
+                            Err(_) => {
+                                thread::sleep(Duration::from_millis(2));
+                                continue;
+                            }
+                        };
+
+                        if buffer_arc.current_epoch() != epoch {
+                            continue;
+                        }
+
+                        if dec.video().is_some() {
+                            let decode_res = dec.next_video_frame();
+                            drop(dec);
+
+                            match decode_res {
+                                Ok(Some(mut vf)) => {
+                                    let seq = seq_count.fetch_add(1, Ordering::SeqCst) + 1;
+                                    eprintln!(
+                                        "[DEBUG DEC] [Streaming] Sequential frame decoded: PTS={} (total_sequential={})",
+                                        vf.pts, seq
+                                    );
+                                    vf.ensure_rgba8();
+                                    let _ = buffer_arc.push_wait(
+                                        vf,
+                                        epoch,
+                                        Some(Duration::from_millis(50)),
+                                    );
+                                }
+                                Ok(None) => {
+                                    eprintln!("[DEBUG DEC] End of stream reached (None)");
+                                    buffer_arc.set_eos(epoch, true);
+                                    let mut ctrl = control_arc.lock().unwrap();
+                                    ctrl.state = DecoderState::Idle;
+                                }
+                                Err(e) => {
+                                    eprintln!("[DEBUG DEC] Decode error: {:?}", e);
+                                    buffer_arc.set_eos(epoch, true);
+                                    let mut ctrl = control_arc.lock().unwrap();
+                                    ctrl.state = DecoderState::Idle;
+                                }
+                            }
+                        } else {
+                            drop(dec);
+                            buffer_arc.set_eos(epoch, true);
+                            thread::sleep(Duration::from_millis(20));
+                        }
+                        continue;
+                    }
+
+                    // =========================================================
+                    // 3. FLUXO DE IDLE / PAUSED
+                    // =========================================================
+                    let epoch = buffer_arc.current_epoch();
+                    if !buffer_arc.is_full() && !buffer_arc.is_eos() {
+                        let mut dec = match decoder_arc.try_lock() {
+                            Ok(g) => g,
+                            Err(_) => {
+                                thread::sleep(Duration::from_millis(2));
+                                continue;
+                            }
+                        };
+                        if buffer_arc.current_epoch() != epoch {
+                            continue;
+                        }
+                        if dec.video().is_some() {
+                            let decode_res = dec.next_video_frame();
+                            drop(dec);
+                            if let Ok(Some(mut vf)) = decode_res {
+                                let seq = seq_count.fetch_add(1, Ordering::SeqCst) + 1;
+                                eprintln!(
+                                    "[DEBUG DEC] [Idle Pre-fill] Sequential frame decoded: PTS={} (total_sequential={})",
+                                    vf.pts, seq
+                                );
                                 vf.ensure_rgba8();
                                 let _ = buffer_arc.push_wait(
                                     vf,
                                     epoch,
                                     Some(Duration::from_millis(50)),
                                 );
-                            }
-                            Ok(None) => {
-                                eprintln!("[DEBUG DEC] Fim natural do fluxo (None)");
+                            } else {
                                 buffer_arc.set_eos(epoch, true);
                             }
-                            Err(e) => {
-                                eprintln!("[DEBUG DEC] ERRO DE DECODIFICAÇÃO: {:?}", e);
-                                buffer_arc.set_eos(epoch, true);
-                            }
+                        } else {
+                            drop(dec);
                         }
                     } else {
-                        drop(dec_guard);
-                        buffer_arc.set_eos(epoch, true);
-                        thread::sleep(Duration::from_millis(20));
+                        let ctrl = control_arc.lock().unwrap();
+                        if ctrl.pending_seek.is_none()
+                            && !ctrl.play_pending
+                            && !shutdown.load(Ordering::SeqCst)
+                        {
+                            let _ = condvar_arc.wait_timeout(ctrl, Duration::from_millis(10));
+                        }
                     }
                 }
             });
@@ -407,10 +716,14 @@ impl PlaybackSession {
 
     /// Seeks the session to a specific presentation timestamp (PTS).
     ///
-    /// Instantly flushes the lookahead ring buffer, performs $O(\log K)$ keyframe lookup
-    /// using `FrameIndex`, decodes the target frame immediately for zero-latency UI response,
-    /// and pre-fills the lookahead buffer forward from the new seek point.
+    /// Delegates to the decoder worker state machine which debounces/coalesces
+    /// rapid scrub events, queries .index via mmap for the nearest keyframe,
+    /// performs container seek, and delivers the decoded target frame.
     pub fn seek_pts(&self, target_pts: i64) -> Result<Option<BridgeFrame>, String> {
+        if self.worker_shutdown.load(Ordering::SeqCst) {
+            return Err("Session is closed".to_string());
+        }
+
         let clamped_pts = target_pts.clamp(0, self.duration_pts);
         let new_epoch = self.current_epoch.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -427,71 +740,37 @@ impl PlaybackSession {
         }
         self.master_clock.seek(clamped_pts);
 
-        // 3. Acquire decoder lock
-        let mut dec = self.decoder.lock().map_err(|e| e.to_string())?;
-
-        // 4. Seek to preceding keyframe in FrameIndex when available
-        let seek_point = if let Some(ref fidx) = self.frame_index {
-            if let Some(kf) = fidx.find_keyframe_at_or_before(clamped_pts) {
-                kf.pts
+        // 3. Queue the seek command with debounce / coalescing
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        {
+            let mut ctrl = self.decoder_control.lock().unwrap();
+            if let Some(ref mut pending) = ctrl.pending_seek {
+                // Coalesce / Debounce: discard intermediate target, update to newest target!
+                pending.target_pts = clamped_pts;
+                pending.epoch = new_epoch;
+                pending.responders.push(tx);
             } else {
-                clamped_pts
+                ctrl.pending_seek = Some(PendingSeekRequest {
+                    target_pts: clamped_pts,
+                    epoch: new_epoch,
+                    responders: vec![tx],
+                });
             }
-        } else {
-            clamped_pts
-        };
+            ctrl.state = DecoderState::Seeking(clamped_pts);
+            self.decoder_condvar.notify_one();
+        }
 
-        dec.seek_pts(seek_point)
-            .map_err(|e| format!("Decoder seek failed to PTS {}: {}", seek_point, e))?;
-
-        let frame = if dec.video().is_some() {
-            let mut target_frame = None;
-            while let Ok(Some(mut vf)) = dec.next_video_frame() {
-                let pts = vf.pts;
-                vf.ensure_rgba8();
-                target_frame = Some(vf);
-                if pts >= clamped_pts {
-                    break;
+        // 4. Wait for the seek to complete and receive the decoded frame
+        match rx.recv_timeout(Duration::from_millis(3000)) {
+            Ok(res) => res,
+            Err(_) => {
+                if self.worker_shutdown.load(Ordering::SeqCst) {
+                    Err("Session is closed".to_string())
+                } else {
+                    Ok(self.get_last_frame())
                 }
             }
-
-            if target_frame.is_none() && seek_point != clamped_pts {
-                let _ = dec.seek_pts(clamped_pts);
-                if let Ok(Some(mut vf)) = dec.next_video_frame() {
-                    vf.ensure_rgba8();
-                    target_frame = Some(vf);
-                }
-            }
-
-            if let Some(vf) = target_frame {
-                if clamped_pts > 0 && clamped_pts < self.duration_pts {
-                    self.current_pts.store(vf.pts, Ordering::SeqCst);
-                }
-                let timestamp_seconds = vf.timestamp_seconds();
-                let bf = BridgeFrame {
-                    width: vf.width,
-                    height: vf.height,
-                    pts: vf.pts,
-                    duration_pts: vf.duration_pts,
-                    rgba_bytes: vf.data,
-                    row_stride_bytes: vf.row_stride_bytes,
-                    timestamp_seconds,
-                };
-                if let Ok(mut last) = self.last_frame.lock() {
-                    *last = Some(bf.clone());
-                }
-                self.broadcast_frame(&bf);
-                Some(bf)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        drop(dec);
-        self.broadcast_state();
-        Ok(frame)
+        }
     }
 
     /// Convenience method to seek by fractional seconds.
@@ -517,6 +796,15 @@ impl PlaybackSession {
         self.is_playing.store(false, Ordering::SeqCst);
         self.worker_shutdown.store(true, Ordering::SeqCst);
         self.lookahead_buffer.close();
+        {
+            let mut ctrl = self.decoder_control.lock().unwrap();
+            if let Some(pending) = ctrl.pending_seek.take() {
+                for r in pending.responders {
+                    let _ = r.send(Ok(self.get_last_frame()));
+                }
+            }
+        }
+        self.decoder_condvar.notify_all();
     }
 }
 
@@ -656,18 +944,51 @@ impl SessionRegistry {
             }
         }
 
-        // Load or build GOP FrameIndex for video files
-        let frame_index = if !file_path.starts_with("synthetic://") {
+        // Load or build GOP FrameIndex and memory-mapped MmapFrameIndex for video files
+        let (frame_index, mmap_frame_index) = if !file_path.starts_with("synthetic://") {
             let path = Path::new(file_path);
-            aether_media::build_or_load_frame_index_with_timebase(path, timebase, None)
-                .ok()
-                .map(Arc::new)
+            let sidecar_candidate = PathBuf::from(format!("{}.index", path.display()));
+            let cache_dir = std::env::temp_dir().join("aether_media_cache");
+            let mgr = aether_media::CacheManager::new(cache_dir);
+
+            let mut mmap_opt = if sidecar_candidate.exists() {
+                aether_media::MmapFrameIndex::open(&sidecar_candidate).ok()
+            } else if let Ok((_, target_path)) = mgr.resolve_frame_index_for_source(path) {
+                if target_path.exists() {
+                    aether_media::MmapFrameIndex::open(&target_path).ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let fidx = aether_media::build_or_load_frame_index_with_timebase(path, timebase, Some(&mgr))
+                .ok();
+
+            if mmap_opt.is_none() {
+                if let Ok((_, target_path)) = mgr.resolve_frame_index_for_source(path) {
+                    mmap_opt = aether_media::MmapFrameIndex::open(&target_path).ok();
+                }
+            }
+
+            (fidx.map(Arc::new), mmap_opt.map(Arc::new))
         } else {
-            None
+            (None, None)
         };
 
         let lookahead_buffer = Arc::new(LookaheadRingBuffer::new(DEFAULT_LOOKAHEAD_CAPACITY));
         let master_clock = Arc::new(MasterClock::new(timebase));
+        let seek_count = Arc::new(AtomicUsize::new(if initial_frame.is_some() { 1 } else { 0 }));
+        let sequential_frame_count = Arc::new(AtomicUsize::new(0));
+
+        let decoder_control = Arc::new(Mutex::new(DecoderWorkerControl {
+            state: DecoderState::Idle,
+            pending_seek: None,
+            play_pending: false,
+            pause_pending: false,
+        }));
+        let decoder_condvar = Arc::new(Condvar::new());
 
         let session = Arc::new(PlaybackSession {
             session_id: session_id.clone(),
@@ -685,12 +1006,17 @@ impl SessionRegistry {
             lookahead_buffer,
             master_clock,
             frame_index,
+            mmap_frame_index,
+            seek_count,
+            sequential_frame_count,
             current_epoch: AtomicU64::new(0),
             worker_shutdown: Arc::new(AtomicBool::new(false)),
             decoder: Arc::new(Mutex::new(decoder)),
             frame_sinks: Mutex::new(Vec::new()),
             state_sinks: Mutex::new(Vec::new()),
             last_frame: Mutex::new(initial_frame),
+            decoder_control,
+            decoder_condvar,
         });
 
         session.start_background_workers();

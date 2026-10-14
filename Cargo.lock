@@ -51,6 +51,7 @@ dependencies = [
  "hound",
  "image",
  "infer",
+ "libc",
  "mp4",
  "serde",
  "symphonia",
