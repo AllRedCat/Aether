@@ -129,9 +129,13 @@ class _PreviewViewState extends ConsumerState<PreviewView> {
       return Center(
         child: AspectRatio(
           aspectRatio: state.aspectRatio,
-          child: FrameRenderer(
-            frame: state.currentFrame,
-            textureId: state.textureId,
+          child: RepaintBoundary(
+            key: const Key('preview_repaint_boundary'),
+            child: FrameRenderer(
+              frame: state.currentFrame,
+              frameNotifier: ref.read(previewProvider.notifier).frameNotifier,
+              textureId: state.textureId,
+            ),
           ),
         ),
       );

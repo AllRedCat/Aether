@@ -13,12 +13,14 @@
 @property (nonatomic, strong) AVAssetReader *reader;
 @property (nonatomic, strong) AVAssetReaderTrackOutput *output;
 @property (nonatomic, assign) AvfMediaInfo info;
+@property (nonatomic, assign) uint32_t targetWidth;
+@property (nonatomic, assign) uint32_t targetHeight;
 @end
 
 @implementation AvfBridgeDecoder
 @end
 
-void* avf_decoder_create(const char* file_path, AvfMediaInfo* out_info, char* err_buf, size_t err_len) {
+void* avf_decoder_create_with_max_size(const char* file_path, uint32_t max_width, uint32_t max_height, AvfMediaInfo* out_info, char* err_buf, size_t err_len) {
     @autoreleasepool {
         if (!file_path) {
             if (err_buf && err_len > 0) snprintf(err_buf, err_len, "Null file path");
@@ -63,9 +65,27 @@ void* avf_decoder_create(const char* file_path, AvfMediaInfo* out_info, char* er
             durationSeconds = 0.0;
         }
 
+        uint32_t orig_w = (uint32_t)naturalSize.width;
+        uint32_t orig_h = (uint32_t)naturalSize.height;
+        uint32_t target_w = orig_w;
+        uint32_t target_h = orig_h;
+
+        if (max_width > 0 && max_height > 0 && (orig_w > max_width || orig_h > max_height)) {
+            double scale_w = (double)max_width / (double)orig_w;
+            double scale_h = (double)max_height / (double)orig_h;
+            double scale = scale_w < scale_h ? scale_w : scale_h;
+            target_w = ((uint32_t)round(orig_w * scale)) & ~1;
+            target_h = ((uint32_t)round(orig_h * scale)) & ~1;
+            if (target_w < 2) target_w = 2;
+            if (target_h < 2) target_h = 2;
+        }
+
+        dec.targetWidth = target_w;
+        dec.targetHeight = target_h;
+
         dec.info = (AvfMediaInfo){
-            .width = (uint32_t)naturalSize.width,
-            .height = (uint32_t)naturalSize.height,
+            .width = target_w,
+            .height = target_h,
             .duration_seconds = durationSeconds,
             .duration_value = duration.value,
             .duration_timescale = duration.timescale,
@@ -86,9 +106,14 @@ void* avf_decoder_create(const char* file_path, AvfMediaInfo* out_info, char* er
             return NULL;
         }
 
-        NSDictionary *settings = @{
+        NSMutableDictionary *settings = [NSMutableDictionary dictionaryWithDictionary:@{
             (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)
-        };
+        }];
+        if (target_w != orig_w || target_h != orig_h) {
+            settings[(id)kCVPixelBufferWidthKey] = @(target_w);
+            settings[(id)kCVPixelBufferHeightKey] = @(target_h);
+        }
+
         dec.output = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:dec.videoTrack
                                                                outputSettings:settings];
         dec.output.alwaysCopiesSampleData = NO;
@@ -103,6 +128,10 @@ void* avf_decoder_create(const char* file_path, AvfMediaInfo* out_info, char* er
 
         return (__bridge_retained void*)dec;
     }
+}
+
+void* avf_decoder_create(const char* file_path, AvfMediaInfo* out_info, char* err_buf, size_t err_len) {
+    return avf_decoder_create_with_max_size(file_path, 0, 0, out_info, err_buf, err_len);
 }
 
 int avf_decoder_next_frame(void* handle, AvfRawFrame* out_frame) {
@@ -194,9 +223,15 @@ int avf_decoder_seek_pts(void* handle, int64_t target_value, int32_t target_time
 
         dec.reader.timeRange = CMTimeRangeMake(seekTime, kCMTimePositiveInfinity);
 
-        NSDictionary *settings = @{
+        NSMutableDictionary *settings = [NSMutableDictionary dictionaryWithDictionary:@{
             (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)
-        };
+        }];
+        if (dec.targetWidth > 0 && dec.targetHeight > 0 &&
+            (dec.targetWidth != (uint32_t)dec.videoTrack.naturalSize.width ||
+             dec.targetHeight != (uint32_t)dec.videoTrack.naturalSize.height)) {
+            settings[(id)kCVPixelBufferWidthKey] = @(dec.targetWidth);
+            settings[(id)kCVPixelBufferHeightKey] = @(dec.targetHeight);
+        }
         dec.output = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:dec.videoTrack
                                                                outputSettings:settings];
         dec.output.alwaysCopiesSampleData = NO;

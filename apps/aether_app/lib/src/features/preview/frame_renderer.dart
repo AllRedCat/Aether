@@ -1,14 +1,17 @@
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../bridge/api.dart';
 
 class FrameRenderer extends StatefulWidget {
   final BridgeFrame? frame;
+  final ValueListenable<BridgeFrame?>? frameNotifier;
   final int textureId;
 
   const FrameRenderer({
     super.key,
     this.frame,
+    this.frameNotifier,
     this.textureId = 0,
   });
 
@@ -17,29 +20,41 @@ class FrameRenderer extends StatefulWidget {
 }
 
 class _FrameRendererState extends State<FrameRenderer> {
-  ui.Image? _image;
+  final ValueNotifier<ui.Image?> _imageNotifier = ValueNotifier<ui.Image?>(null);
   bool _isDecoding = false;
   BridgeFrame? _lastDecodedFrame;
 
   @override
   void initState() {
     super.initState();
-    if (widget.frame != null) {
-      _decodeFrame();
+    widget.frameNotifier?.addListener(_onFrameNotifierChanged);
+    final initialFrame = widget.frameNotifier?.value ?? widget.frame;
+    if (initialFrame != null) {
+      _decodeFrame(initialFrame);
+    }
+  }
+
+  void _onFrameNotifierChanged() {
+    final frame = widget.frameNotifier?.value;
+    if (frame != null && mounted) {
+      _decodeFrame(frame);
     }
   }
 
   @override
   void didUpdateWidget(FrameRenderer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.frame != oldWidget.frame) {
-      _decodeFrame();
+    if (widget.frameNotifier != oldWidget.frameNotifier) {
+      oldWidget.frameNotifier?.removeListener(_onFrameNotifierChanged);
+      widget.frameNotifier?.addListener(_onFrameNotifierChanged);
+    }
+    if (widget.frame != oldWidget.frame && widget.frame != null) {
+      _decodeFrame(widget.frame!);
     }
   }
 
-  Future<void> _decodeFrame() async {
-    final frameToDecode = widget.frame;
-    if (frameToDecode == null || _isDecoding) return;
+  Future<void> _decodeFrame(BridgeFrame frameToDecode) async {
+    if (_isDecoding) return;
     if (_lastDecodedFrame == frameToDecode) return;
 
     final width = frameToDecode.width;
@@ -65,18 +80,18 @@ class _FrameRendererState extends State<FrameRenderer> {
         ui.PixelFormat.rgba8888,
         (image) {
           if (mounted) {
-            setState(() {
-              _image?.dispose();
-              _image = image;
-              _lastDecodedFrame = frameToDecode;
-            });
+            final oldImage = _imageNotifier.value;
+            _imageNotifier.value = image;
+            oldImage?.dispose();
+            _lastDecodedFrame = frameToDecode;
           } else {
             image.dispose();
           }
           _isDecoding = false;
-          // Trigger next frame if missed
-          if (widget.frame != frameToDecode) {
-            _decodeFrame();
+          // Trigger next frame if newer target frame arrived during decode
+          final currentTarget = widget.frameNotifier?.value ?? widget.frame;
+          if (currentTarget != null && currentTarget != frameToDecode) {
+            _decodeFrame(currentTarget);
           }
         },
         rowBytes: stride,
@@ -88,7 +103,11 @@ class _FrameRendererState extends State<FrameRenderer> {
 
   @override
   void dispose() {
-    _image?.dispose();
+    widget.frameNotifier?.removeListener(_onFrameNotifierChanged);
+    final oldImage = _imageNotifier.value;
+    _imageNotifier.value = null;
+    oldImage?.dispose();
+    _imageNotifier.dispose();
     super.dispose();
   }
 
@@ -100,19 +119,24 @@ class _FrameRendererState extends State<FrameRenderer> {
       filterQuality: FilterQuality.medium,
     );
 
-    if (_image == null) {
-      return textureWidget;
-    }
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Opacity(opacity: 0.0, child: textureWidget),
-        RawImage(
-          image: _image,
-          fit: BoxFit.contain,
-          filterQuality: FilterQuality.low,
-        ),
-      ],
+    return ValueListenableBuilder<ui.Image?>(
+      valueListenable: _imageNotifier,
+      builder: (context, image, _) {
+        if (image == null) {
+          return textureWidget;
+        }
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Opacity(opacity: 0.0, child: textureWidget),
+            RawImage(
+              image: image,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.low,
+            ),
+          ],
+        );
+      },
     );
   }
 }

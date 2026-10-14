@@ -27,6 +27,7 @@ typedef struct {
 } AvfRawFrame;
 
 void* avf_decoder_create(const char* file_path, AvfMediaInfo* out_info, char* err_buf, size_t err_len);
+void* avf_decoder_create_with_max_size(const char* file_path, uint32_t max_width, uint32_t max_height, AvfMediaInfo* out_info, char* err_buf, size_t err_len);
 int avf_decoder_next_frame(void* handle, AvfRawFrame* out_frame);
 void avf_decoder_free_frame(AvfRawFrame* frame);
 int avf_decoder_seek_pts(void* handle, int64_t target_value, int32_t target_timescale);

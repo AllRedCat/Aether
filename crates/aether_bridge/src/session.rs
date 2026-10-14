@@ -17,6 +17,11 @@ use aether_media::MmapFrameIndex;
 use crate::api::{BridgeFrame, PlaybackState, PreviewSessionInfo};
 pub use crate::frb_generated::StreamSink;
 
+/// Default maximum preview width (720p proxy resolution).
+pub const DEFAULT_MAX_PREVIEW_WIDTH: u32 = 1280;
+/// Default maximum preview height (720p proxy resolution).
+pub const DEFAULT_MAX_PREVIEW_HEIGHT: u32 = 720;
+
 /// Internal states of the video decoding worker distinguishing idle, scrubbing, and linear playback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderState {
@@ -338,6 +343,8 @@ impl PlaybackSession {
         let session_weak = Arc::downgrade(self);
         let session_id = self.session_id.clone();
         let duration_pts = self.duration_pts;
+        let actual_width = self.width;
+        let actual_height = self.height;
         let frame_bytes = (self.width * self.height * 4) as usize;
 
         let _ = thread::Builder::new()
@@ -452,6 +459,11 @@ impl PlaybackSession {
 
                                         let pts = vf.pts;
                                         vf.ensure_rgba8();
+                                        if vf.width != actual_width || vf.height != actual_height {
+                                            let mut scaled_buf = buffer_arc.acquire_buffer(frame_bytes);
+                                            vf.downscale_into(actual_width, actual_height, &mut scaled_buf);
+                                            buffer_arc.recycle_buffer(scaled_buf);
+                                        }
                                         if let Some(old_vf) = target_frame.replace(vf) {
                                             buffer_arc.recycle_buffer(old_vf.data);
                                         }
@@ -468,6 +480,11 @@ impl PlaybackSession {
                                 let pooled_buf = buffer_arc.acquire_buffer(frame_bytes);
                                 if let Ok(Some(mut vf)) = dec.next_video_frame_with_buffer(pooled_buf) {
                                     vf.ensure_rgba8();
+                                    if vf.width != actual_width || vf.height != actual_height {
+                                        let mut scaled_buf = buffer_arc.acquire_buffer(frame_bytes);
+                                        vf.downscale_into(actual_width, actual_height, &mut scaled_buf);
+                                        buffer_arc.recycle_buffer(scaled_buf);
+                                    }
                                     target_frame = Some(vf);
                                 }
                             }
@@ -567,6 +584,11 @@ impl PlaybackSession {
                                         vf.pts, seq
                                     );
                                     vf.ensure_rgba8();
+                                    if vf.width != actual_width || vf.height != actual_height {
+                                        let mut scaled_buf = buffer_arc.acquire_buffer(frame_bytes);
+                                        vf.downscale_into(actual_width, actual_height, &mut scaled_buf);
+                                        buffer_arc.recycle_buffer(scaled_buf);
+                                    }
                                     let _ = buffer_arc.push_wait(
                                         vf,
                                         epoch,
@@ -620,6 +642,11 @@ impl PlaybackSession {
                                     vf.pts, seq
                                 );
                                 vf.ensure_rgba8();
+                                if vf.width != actual_width || vf.height != actual_height {
+                                    let mut scaled_buf = buffer_arc.acquire_buffer(frame_bytes);
+                                    vf.downscale_into(actual_width, actual_height, &mut scaled_buf);
+                                    buffer_arc.recycle_buffer(scaled_buf);
+                                }
                                 let _ = buffer_arc.push_wait(
                                     vf,
                                     epoch,
@@ -1061,8 +1088,22 @@ impl SessionRegistry {
         &REGISTRY
     }
 
-    /// Creates and registers a new preview playback session for the given media path.
+    /// Creates and registers a new preview playback session for the given media path with default proxy downscaling.
     pub fn create_session(&self, file_path: &str) -> Result<PreviewSessionInfo, String> {
+        self.create_session_with_config(
+            file_path,
+            Some(DEFAULT_MAX_PREVIEW_WIDTH),
+            Some(DEFAULT_MAX_PREVIEW_HEIGHT),
+        )
+    }
+
+    /// Creates and registers a new preview playback session with configurable maximum preview resolution (proxy downscaling).
+    pub fn create_session_with_config(
+        &self,
+        file_path: &str,
+        max_preview_width: Option<u32>,
+        max_preview_height: Option<u32>,
+    ) -> Result<PreviewSessionInfo, String> {
         if file_path.trim().is_empty() {
             return Err("File path cannot be empty".to_string());
         }
@@ -1082,8 +1123,16 @@ impl SessionRegistry {
             }
         }
 
-        let mut decoder = aether_media::open_media_decoder(file_path)
-            .map_err(|e| format!("Failed to open media decoder for '{}': {}", file_path, e))?;
+        let max_w = max_preview_width.unwrap_or(DEFAULT_MAX_PREVIEW_WIDTH);
+        let max_h = max_preview_height.unwrap_or(DEFAULT_MAX_PREVIEW_HEIGHT);
+
+        let mut decoder = aether_media::open_media_decoder_with_config(
+            file_path,
+            Rational { num: 60, den: 1 },
+            Some(max_w),
+            Some(max_h),
+        )
+        .map_err(|e| format!("Failed to open media decoder for '{}': {}", file_path, e))?;
 
         let meta = decoder.metadata().clone();
         let media_type = decoder.media_type();
@@ -1148,13 +1197,26 @@ impl SessionRegistry {
 
         // Pre-fetch initial frame at PTS 0 for video assets
         let mut initial_frame: Option<BridgeFrame> = None;
-        let mut actual_width = width;
-        let mut actual_height = height;
+        let (mut actual_width, mut actual_height) = aether_media::calculate_preview_dimensions(
+            width,
+            height,
+            Some(max_w),
+            Some(max_h),
+        );
 
         if decoder.video().is_some() {
             let _ = decoder.seek_pts(0);
             if let Ok(Some(mut vf)) = decoder.next_video_frame() {
                 vf.ensure_rgba8();
+                let (target_w, target_h) = aether_media::calculate_preview_dimensions(
+                    vf.width,
+                    vf.height,
+                    Some(max_w),
+                    Some(max_h),
+                );
+                if vf.width != target_w || vf.height != target_h {
+                    vf.downscale_to(target_w, target_h);
+                }
                 actual_width = vf.width;
                 actual_height = vf.height;
                 let timestamp_seconds = vf.timestamp_seconds();

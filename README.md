@@ -45,12 +45,30 @@ A arquitetura do projeto une o melhor de dois mundos: **Flutter** para uma inter
 
 ### 📺 Player de Pré-Visualização Nativo (Preview & Playback Engine 60 FPS)
 - **Streaming de Quadros em Tempo Real via FFI:** Transmissão eficiente de frames brutos RGBA8 do Rust para o Flutter utilizando `StreamSink`.
-- **Renderizador Otimizado (`RawImage`):** Decodificação em memória com correção de *stride* (`rowBytes`) para prevenir distorções e cisalhamentos diagonais.
+- **Renderizador Otimizado (`RawImage` & Zero `setState`):** Decodificação em memória com correção de *stride* (`rowBytes`) para prevenir distorções e cisalhamentos diagonais, renderizado via `ValueListenableBuilder` desacoplado da árvore do editor.
 - **Motor de Reprodução Assíncrono:** Arquitetura desacoplada multithread com threads dedicadas de *demux/decodificação* (`aether-dec`) e de *emissão/apresentação* (`aether-emit`), isolando completamente a thread principal de UI do trabalho pesado de descompressão.
-- **Buffer Circular com Leitura Antecipada (*Lookahead Ring Buffer*):** Fila de pré-carregamento contínuo em memória (`LookaheadRingBuffer`, capacidade de 8 a 16 frames RGBA8 decodificados) para garantir reprodução fluida a 60 fps e prevenir *stuttering* e *buffering* em codecs inter-frame pesados (H.264/HEVC).
-- **Sincronização A/V com Master Audio Clock:** Tempo de reprodução ditado pelo relógio de áudio de alta precisão (`MasterClock`), com interpolação monotônica e alinhamento instantâneo aos buffers de áudio PCM, eliminando qualquer desvio acumulado de sincronia entre faixas de vídeo e áudio.
-- **Descarte Inteligente de Quadros (*Frame Dropping*):** Pulo automático e de custo zero de quadros atrasados via `FrameDropper` quando o playhead alcança ou ultrapassa o tempo do quadro $N+1$ antes da exibição do quadro $N$ ($PTS_N + \Delta PTS_N \le MasterClock$), prevenindo atrasos cumulativos sob estresse de hardware.
-- **Flush Imediato e Zero-Latency Seeks:** Limpeza instantânea do conteúdo do buffer (`flush_and_set_epoch`) com incremento atômico de época, salto $O(\log K)$ para o I-Frame/IDR-Frame anterior via `FrameIndex` (`.fidx`) e recomposição imediata do quadro alvo durante o *scrubbing*, preenchendo o buffer antecipado para a frente em background.
+- **Máquina de Estados do Decoder & Leitura Sequencial Contínua:** Separação estrita entre `Idle / Paused`, `Seeking(TargetTimestamp)` e `Streaming(Linear Playback)`. Durante a reprodução contínua, seeks por frame são terminantemente proibidos, lendo pacotes/quadros sequencialmente sem reiniciar o decodificador inter-frame (H.264/HEVC). Múltiplos seeks concorrentes durante *scrubbing* são agregados (*debouncing/coalescing*), processando apenas o alvo mais recente.
+- **Descarte de Quadros em Duas Camadas (*Soft Drop* vs. *Hard Drop*):**
+  - *Sincronia Estrita* ($\le 25\text{ms}$): apresentação imediata e fluida.
+  - *Soft Drop* ($25\text{ms} - 180\text{ms}$): descarte seletivo no consumidor/apresentador sem interromper ou reiniciar o decodificador, preservando intacta a cadeia de referências dos quadros P e B.
+  - *Hard Drop* ($> 200\text{ms}$): recuperação rápida via `.fidx` com salto atômico para o I-Frame/IDR anterior mais próximo, prevenindo congelamentos e espirais de atraso cumulativo.
+- **Pre-Roll de Buffer (Warm-Up) & MasterClock Lock-Free:**
+  - Fase de warm-up ao iniciar reprodução que pré-carrega o `LookaheadRingBuffer` até uma marca d'água mínima segura (*High-Water Mark*) com o relógio mestre congelado no timestamp inicial, liberando a reprodução sem nenhum frame drop prematuro.
+  - Leitura do `MasterClock` totalmente lock-free via tipos atômicos (`AtomicU64`, `AtomicI64`), sem contenção de `Mutex` no caminho crítico de renderização de vídeo e áudio.
+- **Fila SPSC & Zero-Allocation Continuous Playback:**
+  - Buffer circular com modelo Single-Producer Single-Consumer (SPSC) e índices atômicos, eliminando contenção entre a thread de decodificação e a thread de apresentação.
+  - Pool de reciclagem de buffers de memória (`FrameBufferPool`), reaproveitando vetores pré-alocados de tamanho fixo e eliminando alocações/desalocações de megabytes por frame a 60 FPS.
+- **Downscaling de Proxy Nativo no Rust (Economia de até 88.9% de Banda):**
+  - Resolução de proxy de preview nativa configurável (padrão 720p / `1280x720`) calculada por `calculate_preview_dimensions`, preservando rigorosamente o aspect ratio e sem aplicar upscaling a mídias menores.
+  - Aceleração por hardware no macOS via `AVAssetReaderTrackOutput` com chaves de largura/altura nativas da Apple Silicon, entregando buffers de vídeo já redimensionados pelo hardware de mídia do SoC.
+  - Resampling por CPU com amostragem de área (box sampling) e buffers reutilizados do pool para decodificadores de software/sintéticos.
+  - **Redução de Banda de Memória:** Reduz o payload de cada quadro de ~33.2 MB para ~3.68 MB em vídeos 4K (**-88.89%** de banda) e de ~8.29 MB para ~3.68 MB em vídeos 1080p (**-55.56%** de banda), economizando gigabytes de tráfego por segundo.
+- **Otimizações no Flutter (Isolamento de UI Thread):**
+  - Desacoplamento da taxa de quadros via `ValueNotifier<BridgeFrame?>`, permitindo 60 FPS diretos na renderização sem disparar rebuilds de tela no Riverpod.
+  - Throttling das atualizações de estado global do Riverpod para ~15 FPS durante a reprodução contínua (com atualização instantânea em scrubbing).
+  - Descarte imediato (`dispose()`) de objetos `ui.Image` consumidos, eliminando pressão no Garbage Collector do Dart.
+  - Isolamento de camadas com `RepaintBoundary`, impedindo que a repintura contínua de vídeo invalide a barra de ferramentas, linha do tempo ou painéis de inspeção.
+- **Flush Imediato e Zero-Latency Seeks:** Limpeza instantânea do conteúdo do buffer (`flush_and_set_epoch`) com incremento atômico de época, salto $O(\log K)$ para o I-Frame/IDR-Frame anterior via `FrameIndex` (`.fidx`) e recomposição imediata do quadro alvo durante o *scrubbing*.
 - **Controles de Transporte Eficientes:** Operações de `play()` e `pause()` que iniciam e congelam o relógio mestre sem destruir threads do SO (zero consumo de CPU quando pausado).
 - **Timecode Reativo:** Exibição precisa sincronizada com o playhead (PTS e formato `HH:MM:SS:FF`).
 
@@ -166,15 +184,21 @@ Aether/
 
 O Aether conta com uma infraestrutura rigorosa de testes cobrindo múltiplos níveis:
 
-1. **Rust Core, Media & Bridge Unit/Stress Tests:**
+1. **Rust Core, Media & Bridge Unit/Stress Tests (116+ testes):**
    - Validação de layout binário `#[repr(C)]` de 24 bytes (`FrameIndexEntry` e `ThumbnailIndexEntry`), serialização/desserialização `.fidx` e `.atlas`, e busca binária $O(\log N)$ com tolerância a limites (`pts < 0`, entre P/B-frames, `i64::MAX`, streams vazias e orçamento < 5ms).
    - Testes de cálculo de picos de áudio (`min`, `max`, `rms`) com buffers PCM sintéticos (silêncio, onda senoidal pura com $\text{RMS} = 1/\sqrt{2}$, clipping em amplitude máxima e resistência a `NaN`/`Inf`), geração de pirâmide multi-LOD e leitura seletiva por nível.
-   - Validação dos contratos FFI (`import_media` e `get_audio_waveform` através de múltiplos níveis LOD) em `aether_bridge`.
+   - Validação dos contratos FFI (`import_media`, `create_preview_session`, `create_preview_session_with_max_size` e `get_audio_waveform` através de múltiplos níveis LOD) em `aether_bridge`.
    - Testes de extração assíncrona de filmstrips (`160×90` JPEG/WebP), montagem de spritesheet e lookup por timestamp.
    - Verificação de fingerprinting determinístico (`partial_header + file_size + mtime`) contra vetores oficiais NIST SHA-256.
    - Validação de persistência SQLite (`store.rs`) e migração automática de projetos JSON legados.
    - Fuzzing de contêineres danificados, arquivos truncados, `timescale == 0` e cabeçalhos corrompidos sem `panic!`.
-   - Testes de reprodução contínua com Lookahead Ring Buffer, A/V Sync e concorrência multithread sob estresse de seeks aleatórios simultâneos (`playback_engine_concurrency_test.rs`), garantindo ausência de deadlocks, pânicos ou vazamento de memória.
+   - **Suíte de Reprodução e Estresse Multithread (`playback_tests.rs`, `playback_engine_concurrency_test.rs`):**
+     - Leitura contínua estritamente sequencial sem seeks por frame (`test_continuous_playback_single_initial_seek_and_strictly_sequential_reads`).
+     - Descarte seletivo do `FrameDropper` (*Soft Drop* preservando referências P/B vs. *Hard Drop* com recuperação via `.fidx`).
+     - Warm-up com fase de `PreRoll` e zero frame drops no início do playback (`test_preroll_zero_frame_drops_on_playback_start`).
+     - Leitura 100% lock-free do `MasterClock` por leitores concorrentes (`test_master_clock_lock_free_concurrent_readers`).
+     - Zero alocações de heap durante reprodução contínua com canal SPSC e `FrameBufferPool` (`test_zero_allocation_decoding_loop_continuous_playback`).
+     - Downscale nativo de proxy 720p com verificação matemática de economia de banda de até 88.9% em 4K e 55.6% em 1080p (`test_preview_proxy_downscaling_and_bandwidth_reduction`).
 2. **Flutter Widget & Integration Tests (184 testes):**
    - Testes de interação com a Timeline, renderização direta de waveforms via `AudioWaveformPainter` a partir de arrays `AudioPeak` da FFI, seleção de clipes e propagação ao Inspector.
    - Testes de indicadores visuais não-bloqueantes de progresso de indexação (`ImportProgress` stream) no `MediaPoolView`.

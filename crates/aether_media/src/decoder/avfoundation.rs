@@ -33,8 +33,17 @@ mod native {
     }
 
     extern "C" {
+        #[allow(dead_code)]
         fn avf_decoder_create(
             file_path: *const c_char,
+            out_info: *mut AvfMediaInfo,
+            err_buf: *mut c_char,
+            err_len: usize,
+        ) -> *mut c_void;
+        fn avf_decoder_create_with_max_size(
+            file_path: *const c_char,
+            max_width: u32,
+            max_height: u32,
             out_info: *mut AvfMediaInfo,
             err_buf: *mut c_char,
             err_len: usize,
@@ -65,10 +74,19 @@ mod native {
 
     impl AvFoundationVideoDecoder {
         pub fn open(path: &str) -> DecoderResult<Self> {
-            Self::open_with_timebase(path, crate::DEFAULT_TIMEBASE)
+            Self::open_with_config(path, crate::DEFAULT_TIMEBASE, None, None)
         }
 
         pub fn open_with_timebase(path: &str, timebase: Rational) -> DecoderResult<Self> {
+            Self::open_with_config(path, timebase, None, None)
+        }
+
+        pub fn open_with_config(
+            path: &str,
+            timebase: Rational,
+            max_width: Option<u32>,
+            max_height: Option<u32>,
+        ) -> DecoderResult<Self> {
             let p = Path::new(path);
             if !p.exists() {
                 return Err(DecoderError::FileNotFound(path.to_string()));
@@ -88,9 +106,14 @@ mod native {
             let mut info = std::mem::MaybeUninit::<AvfMediaInfo>::uninit();
             let mut err_buf = [0 as c_char; 512];
 
+            let max_w = max_width.unwrap_or(0);
+            let max_h = max_height.unwrap_or(0);
+
             let handle = unsafe {
-                avf_decoder_create(
+                avf_decoder_create_with_max_size(
                     c_path.as_ptr(),
+                    max_w,
+                    max_h,
                     info.as_mut_ptr(),
                     err_buf.as_mut_ptr(),
                     err_buf.len(),

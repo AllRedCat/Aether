@@ -142,6 +142,12 @@ class PreviewNotifier extends StateNotifier<PreviewState> {
   StreamSubscription<BridgeFrame>? _frameSub;
   StreamSubscription<PlaybackState>? _playbackSub;
   int _sessionGeneration = 0;
+  int _lastStateFrameUpdateMs = 0;
+
+  /// Dedicated frame notifier emitting video frames at 60 FPS directly to the video canvas
+  /// without triggering mass rebuilds of the entire editor preview panel.
+  final ValueNotifier<BridgeFrame?> frameNotifier =
+      ValueNotifier<BridgeFrame?>(null);
 
   PreviewNotifier({required PreviewBridgeService bridgeService})
       : _bridgeService = bridgeService,
@@ -165,6 +171,7 @@ class PreviewNotifier extends StateNotifier<PreviewState> {
     final generation = ++_sessionGeneration;
     final previousSessionId = state.session?.sessionId;
 
+    frameNotifier.value = null;
     state = state.copyWith(
       isLoading: true,
       currentMedia: media,
@@ -223,11 +230,19 @@ class PreviewNotifier extends StateNotifier<PreviewState> {
         _bridgeService.subscribePreviewFrames(sessionId: sessionId).listen(
       (frame) {
         if (!mounted) return;
-        state = state.copyWith(
-          currentFrame: frame,
-          currentPts: frame.pts,
-          currentSeconds: frame.timestampSeconds,
-        );
+        frameNotifier.value = frame;
+
+        // When paused (seeking/scrubbing), update full state immediately for responsive scrubber & timecode.
+        // During active playback, throttle full state notification to ~15 FPS (every 66ms) to avoid saturating UI thread.
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (!state.isPlaying || now - _lastStateFrameUpdateMs >= 66) {
+          _lastStateFrameUpdateMs = now;
+          state = state.copyWith(
+            currentFrame: frame,
+            currentPts: frame.pts,
+            currentSeconds: frame.timestampSeconds,
+          );
+        }
       },
       onError: (e) {
         // Stream errors do not crash UI
@@ -381,6 +396,7 @@ class PreviewNotifier extends StateNotifier<PreviewState> {
     _frameSub = null;
     _playbackSub?.cancel();
     _playbackSub = null;
+    frameNotifier.value = null;
 
     if (!mounted) return;
     if (targetSessionId != null) {
@@ -400,6 +416,7 @@ class PreviewNotifier extends StateNotifier<PreviewState> {
     _frameSub = null;
     _playbackSub?.cancel();
     _playbackSub = null;
+    frameNotifier.dispose();
     if (sessionId != null) {
       _bridgeService.closePreviewSession(sessionId: sessionId).ignore();
     }

@@ -7,8 +7,9 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use aether_bridge::api::{
-    close_preview_session, create_preview_session, extract_single_frame, get_preview_state,
-    init_engine, preview_pause, preview_play, preview_seek_pts, preview_seek_seconds,
+    close_preview_session, create_preview_session, create_preview_session_with_max_size,
+    extract_single_frame, get_preview_state, init_engine, preview_pause, preview_play,
+    preview_seek_pts, preview_seek_seconds,
 };
 use aether_bridge::session::{SessionRegistry, TransportState};
 use aether_core::timeline::Rational;
@@ -1005,4 +1006,73 @@ fn test_rapid_seek_and_play_concurrency_no_deadlock() {
 
     close_preview_session(info.session_id).expect("Clean session close");
 }
+
+#[test]
+fn test_preview_proxy_downscaling_and_bandwidth_reduction() {
+    // 1. Verify dimensional calculations and bandwidth math
+    let (w4k, h4k) = aether_media::calculate_preview_dimensions(3840, 2160, Some(1280), Some(720));
+    assert_eq!((w4k, h4k), (1280, 720));
+    let orig_4k_bytes = 3840 * 2160 * 4;
+    let proxy_4k_bytes = w4k * h4k * 4;
+    let savings_4k = 1.0 - (proxy_4k_bytes as f64 / orig_4k_bytes as f64);
+    assert!(savings_4k > 0.88, "4K proxy downscale must reduce bandwidth by ~88.9%");
+
+    let (w1080, h1080) = aether_media::calculate_preview_dimensions(1920, 1080, Some(1280), Some(720));
+    assert_eq!((w1080, h1080), (1280, 720));
+    let orig_1080_bytes = 1920 * 1080 * 4;
+    let proxy_1080_bytes = w1080 * h1080 * 4;
+    let savings_1080 = 1.0 - (proxy_1080_bytes as f64 / orig_1080_bytes as f64);
+    assert!(savings_1080 > 0.55, "1080p proxy downscale must reduce bandwidth by ~55.5%");
+
+    // Smaller assets must never be upscaled
+    let (w_small, h_small) = aether_media::calculate_preview_dimensions(640, 360, Some(1280), Some(720));
+    assert_eq!((w_small, h_small), (640, 360));
+
+    // 2. Test live session with synthetic 1080p source downscaled to 720p proxy
+    let synthetic_1080p = "synthetic://proxy_test?width=1920&height=1080&fps=30&duration=2.0";
+    let info = create_preview_session_with_max_size(
+        synthetic_1080p.to_string(),
+        Some(1280),
+        Some(720),
+    )
+    .expect("Create downscaled 720p proxy preview session");
+
+    assert_eq!(info.width, 1280, "Session width must be downscaled to 1280");
+    assert_eq!(info.height, 720, "Session height must be downscaled to 720");
+
+    let session = SessionRegistry::global()
+        .get_session(&info.session_id)
+        .expect("Active session");
+
+    // Verify initial frame payload is 720p RGBA8
+    let initial = session.get_last_frame().expect("Initial preview frame");
+    assert_eq!(initial.width, 1280);
+    assert_eq!(initial.height, 720);
+    assert_eq!(
+        initial.rgba_bytes.len(),
+        (1280 * 720 * 4) as usize,
+        "Initial frame payload must be exactly downscaled 720p buffer (3.68 MB instead of 8.29 MB)"
+    );
+
+    // Verify scrubber seek frame is also downscaled to 720p
+    let scrubbed = preview_seek_seconds(info.session_id.clone(), 1.0)
+        .expect("Scrub seek")
+        .expect("Frame at 1.0s");
+    assert_eq!(scrubbed.width, 1280);
+    assert_eq!(scrubbed.height, 720);
+    assert_eq!(scrubbed.rgba_bytes.len(), (1280 * 720 * 4) as usize);
+
+    // Verify continuous playback emits downscaled frames into lookahead buffer
+    preview_play(info.session_id.clone()).expect("Play");
+    thread::sleep(Duration::from_millis(300));
+    preview_pause(info.session_id.clone()).expect("Pause");
+
+    let last_frame = session.get_last_frame().expect("Last frame");
+    assert_eq!(last_frame.width, 1280);
+    assert_eq!(last_frame.height, 720);
+    assert_eq!(last_frame.rgba_bytes.len(), (1280 * 720 * 4) as usize);
+
+    close_preview_session(info.session_id).expect("Close session");
+}
+
 

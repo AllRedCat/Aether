@@ -93,6 +93,16 @@ pub fn open_media_decoder_with_timebase(
     path_str: &str,
     timebase: Rational,
 ) -> DecoderResult<Box<dyn MediaDecoder>> {
+    open_media_decoder_with_config(path_str, timebase, None, None)
+}
+
+/// Opens any media asset with an explicit project timebase and optional maximum preview dimensions.
+pub fn open_media_decoder_with_config(
+    path_str: &str,
+    timebase: Rational,
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+) -> DecoderResult<Box<dyn MediaDecoder>> {
     // 1. Synthetic URI handling (e.g. synthetic://test?width=64&height=64&fps=30&duration=1.0)
     if path_str.starts_with("synthetic://") {
         let syn_dec = SyntheticVideoDecoder::open_with_timebase(path_str, timebase)?;
@@ -161,7 +171,7 @@ pub fn open_media_decoder_with_timebase(
         MediaType::Video => {
             #[cfg(target_os = "macos")]
             let video_dec: Box<dyn VideoDecoder> =
-                Box::new(AvFoundationVideoDecoder::open_with_timebase(path_str, timebase)?);
+                Box::new(AvFoundationVideoDecoder::open_with_config(path_str, timebase, max_width, max_height)?);
 
             #[cfg(not(target_os = "macos"))]
             let video_dec: Box<dyn VideoDecoder> =

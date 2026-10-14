@@ -1150,9 +1150,18 @@ pub struct PlaybackState {
 
 /// Opens a media asset, extracts container metadata, pre-fetches the initial frame at PTS 0,
 /// allocates a unique texture ID for Flutter's `Texture(textureId: ...)` widget,
-/// and registers the active playback session in the `SessionRegistry`.
+/// and registers the active playback session in the `SessionRegistry` with proxy downscaling.
 pub fn create_preview_session(file_path: String) -> Result<PreviewSessionInfo, String> {
     crate::session::SessionRegistry::global().create_session(&file_path)
+}
+
+/// Creates a preview playback session with explicit maximum preview width and height.
+pub fn create_preview_session_with_max_size(
+    file_path: String,
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+) -> Result<PreviewSessionInfo, String> {
+    crate::session::SessionRegistry::global().create_session_with_config(&file_path, max_width, max_height)
 }
 
 /// Closes the active playback session, terminates background ticker threads,

@@ -147,6 +147,90 @@ impl VideoFrame {
         }
     }
 
+    /// Scales the frame in-place into the destination buffer `dst_data` using fast
+    /// high-quality box-area downsampling.
+    ///
+    /// The destination buffer `dst_data` is cleared and populated with the downscaled
+    /// RGBA pixels. Then `self.data` and `*dst_data` are swapped so `self.data` contains
+    /// the downscaled frame and `*dst_data` contains the old unscaled buffer (available for recycling).
+    ///
+    /// If the frame is already within `(target_width, target_height)`, this is a zero-cost no-op.
+    pub fn downscale_into(
+        &mut self,
+        target_width: u32,
+        target_height: u32,
+        dst_data: &mut Vec<u8>,
+    ) {
+        if self.width <= target_width && self.height <= target_height {
+            return;
+        }
+        if self.width == 0 || self.height == 0 || target_width == 0 || target_height == 0 {
+            return;
+        }
+        self.ensure_rgba8();
+
+        let src_w = self.width as usize;
+        let src_h = self.height as usize;
+        let dst_w = target_width as usize;
+        let dst_h = target_height as usize;
+
+        let src_stride = self.row_stride_bytes as usize;
+        let dst_stride = dst_w * 4;
+        let required_bytes = dst_stride * dst_h;
+
+        dst_data.clear();
+        if dst_data.capacity() < required_bytes {
+            dst_data.reserve(required_bytes - dst_data.capacity());
+        }
+
+        for y in 0..dst_h {
+            let src_y_start = (y * src_h) / dst_h;
+            let src_y_end = (((y + 1) * src_h) / dst_h).max(src_y_start + 1).min(src_h);
+            let y_span = (src_y_end - src_y_start) as u32;
+
+            for x in 0..dst_w {
+                let src_x_start = (x * src_w) / dst_w;
+                let src_x_end = (((x + 1) * src_w) / dst_w).max(src_x_start + 1).min(src_w);
+                let x_span = (src_x_end - src_x_start) as u32;
+
+                let area = (x_span * y_span).max(1) as u32;
+                let mut sum_r = 0u32;
+                let mut sum_g = 0u32;
+                let mut sum_b = 0u32;
+                let mut sum_a = 0u32;
+
+                for sy in src_y_start..src_y_end {
+                    let row_offset = sy * src_stride;
+                    for sx in src_x_start..src_x_end {
+                        let px_offset = row_offset + sx * 4;
+                        if px_offset + 3 < self.data.len() {
+                            sum_r += self.data[px_offset] as u32;
+                            sum_g += self.data[px_offset + 1] as u32;
+                            sum_b += self.data[px_offset + 2] as u32;
+                            sum_a += self.data[px_offset + 3] as u32;
+                        }
+                    }
+                }
+
+                dst_data.push((sum_r / area) as u8);
+                dst_data.push((sum_g / area) as u8);
+                dst_data.push((sum_b / area) as u8);
+                dst_data.push((sum_a / area) as u8);
+            }
+        }
+
+        std::mem::swap(&mut self.data, dst_data);
+        self.width = target_width;
+        self.height = target_height;
+        self.row_stride_bytes = (target_width * 4) as u32;
+    }
+
+    /// Convenience in-place downscale allocating an internal temporary buffer if scaling is required.
+    pub fn downscale_to(&mut self, target_width: u32, target_height: u32) {
+        let mut tmp = Vec::new();
+        self.downscale_into(target_width, target_height, &mut tmp);
+    }
+
     /// Returns the effective frames-per-second (FPS) derived from the timebase.
     pub fn fps(&self) -> f64 {
         if self.timebase.den != 0 && self.timebase.num > 0 {
@@ -261,3 +345,40 @@ impl AudioBuffer {
         }
     }
 }
+
+/// Calculates target preview proxy dimensions constrained by `max_width` and `max_height`,
+/// strictly preserving the original aspect ratio and ensuring even pixel dimensions.
+///
+/// If the source dimensions are already within the bounds, returns `(source_width, source_height)`
+/// without upscaling.
+pub fn calculate_preview_dimensions(
+    source_width: u32,
+    source_height: u32,
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+) -> (u32, u32) {
+    if source_width == 0 || source_height == 0 {
+        return (source_width, source_height);
+    }
+    let max_w = match max_width {
+        Some(w) if w > 0 => w,
+        _ => return (source_width, source_height),
+    };
+    let max_h = match max_height {
+        Some(h) if h > 0 => h,
+        _ => return (source_width, source_height),
+    };
+
+    if source_width <= max_w && source_height <= max_h {
+        return (source_width, source_height);
+    }
+
+    let scale_w = max_w as f64 / source_width as f64;
+    let scale_h = max_h as f64 / source_height as f64;
+    let scale = scale_w.min(scale_h);
+
+    let target_w = ((source_width as f64 * scale).round() as u32).max(2) & !1;
+    let target_h = ((source_height as f64 * scale).round() as u32).max(2) & !1;
+    (target_w, target_h)
+}
+
