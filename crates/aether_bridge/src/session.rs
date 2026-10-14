@@ -96,6 +96,7 @@ pub struct PlaybackSession {
     pub is_playing: Arc<AtomicBool>,
     pub transport_state: Arc<AtomicU8>,
     pub current_pts: Arc<AtomicI64>,
+    pub decoder_pts: Arc<AtomicI64>,
     pub lookahead_buffer: Arc<LookaheadRingBuffer>,
     pub master_clock: Arc<MasterClock>,
     pub frame_index: Option<Arc<FrameIndex>>,
@@ -242,6 +243,18 @@ impl PlaybackSession {
         self.master_clock.current_seconds()
     }
 
+    /// Queries the frame index (mmap or in-memory) for the nearest keyframe at or before `target_pts`.
+    pub fn nearest_keyframe_pts(&self, target_pts: i64) -> i64 {
+        let clamped = target_pts.clamp(0, self.duration_pts);
+        if let Some(ref m_idx) = self.mmap_frame_index {
+            m_idx.seek_keyframe(clamped).map(|kf| kf.pts).unwrap_or(0)
+        } else if let Some(ref idx) = self.frame_index {
+            idx.seek_keyframe(clamped).map(|kf| kf.pts).unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
     /// Starts sequential playback governed by the master clock.
     pub fn play(self: &Arc<Self>) -> Result<(), String> {
         // If at or beyond EOS, restart from beginning
@@ -255,15 +268,24 @@ impl PlaybackSession {
         }
 
         let cur = self.current_pts.load(Ordering::SeqCst);
+        let clock_fps = self.master_clock.fps().max(1.0);
+        let tolerance_pts = ((FrameDropper::SYNC_TOLERANCE_MS as f64 / 1000.0) * clock_fps).round() as i64;
 
         // Pre-roll warm-up check:
         // If the lookahead buffer already holds enough frames, buffer is full,
-        // or EOS has been reached, begin Playing immediately at the front frame's PTS.
+        // or EOS has been reached, AND the front frame matches current PTS (within tolerance),
+        // begin Playing immediately at the front frame's PTS.
         // Otherwise, enter PreRoll and keep MasterClock frozen at cur.
         let buf_len = self.lookahead_buffer.len();
-        let is_warm = buf_len >= PREROLL_HIGH_WATER_MARK
-            || self.lookahead_buffer.is_eos()
-            || self.lookahead_buffer.is_full();
+        let front_valid = self
+            .lookahead_buffer
+            .peek_front_with_successor()
+            .map_or(false, |(pts, _, _)| pts + tolerance_pts >= cur);
+
+        let is_warm = front_valid
+            && (buf_len >= PREROLL_HIGH_WATER_MARK
+                || self.lookahead_buffer.is_eos()
+                || self.lookahead_buffer.is_full());
 
         if is_warm && buf_len > 0 {
             let start_pts = self
@@ -275,8 +297,8 @@ impl PlaybackSession {
             self.transport_state
                 .store(TransportState::Playing as u8, Ordering::Release);
         } else {
-            self.master_clock.pause();
             self.master_clock.seek(cur);
+            self.master_clock.pause();
             self.transport_state
                 .store(TransportState::PreRoll as u8, Ordering::Release);
         }
@@ -335,7 +357,11 @@ impl PlaybackSession {
         let control_arc = Arc::clone(&self.decoder_control);
         let condvar_arc = Arc::clone(&self.decoder_condvar);
         let is_playing = Arc::clone(&self.is_playing);
+        let transport_state = Arc::clone(&self.transport_state);
         let current_pts = Arc::clone(&self.current_pts);
+        let decoder_pts = Arc::clone(&self.decoder_pts);
+        let clock_arc = Arc::clone(&self.master_clock);
+        let clock_fps = self.master_clock.fps().max(1.0);
         let seek_count = Arc::clone(&self.seek_count);
         let seq_count = Arc::clone(&self.sequential_frame_count);
         let mmap_fidx = self.mmap_frame_index.clone();
@@ -415,63 +441,26 @@ impl PlaybackSession {
                             }
                             continue;
                         }
+                        decoder_pts.store(keyframe_pts, Ordering::SeqCst);
 
-                        // Advance discarding intermediate frames until target_pts
+                        // Advance discarding intermediate frames cheaply until target_pts
                         let mut target_frame = None;
                         if dec.video().is_some() {
-                            loop {
-                                let pooled_buf = buffer_arc.acquire_buffer(frame_bytes);
-                                let frame_res = dec.next_video_frame_with_buffer(pooled_buf);
-                                match frame_res {
-                                    Ok(Some(mut vf)) => {
-                                        // While advancing, check if a newer seek request arrived (coalesce/debounce)!
-                                        let has_newer = {
-                                            let mut ctrl = control_arc.lock().unwrap();
-                                            if let Some(mut newer) = ctrl.pending_seek.take() {
-                                                seek_req.responders.append(&mut newer.responders);
-                                                target_pts = newer.target_pts.clamp(0, duration_pts);
-                                                ctrl.state = DecoderState::Seeking(target_pts);
-                                                true
-                                            } else {
-                                                false
-                                            }
-                                        };
-
-                                        if has_newer {
-                                            buffer_arc.recycle_buffer(vf.data);
-                                            let newer_kf = if let Some(ref m_idx) = mmap_fidx {
-                                                m_idx.seek_keyframe(target_pts).map(|kf| kf.pts).unwrap_or(target_pts)
-                                            } else if let Some(ref idx) = fidx {
-                                                idx.seek_keyframe(target_pts).map(|kf| kf.pts).unwrap_or(target_pts)
-                                            } else {
-                                                target_pts
-                                            };
-                                            if newer_kf != keyframe_pts {
-                                                let seeks = seek_count.fetch_add(1, Ordering::SeqCst) + 1;
-                                                eprintln!(
-                                                    "[DEBUG DEC] [Seeking Coalesced] Seek to newer keyframe_pts={} (total_seeks={})",
-                                                    newer_kf, seeks
-                                                );
-                                                let _ = dec.seek_pts(newer_kf);
-                                            }
-                                            continue;
-                                        }
-
-                                        let pts = vf.pts;
-                                        vf.ensure_rgba8();
-                                        if vf.width != actual_width || vf.height != actual_height {
-                                            let mut scaled_buf = buffer_arc.acquire_buffer(frame_bytes);
-                                            vf.downscale_into(actual_width, actual_height, &mut scaled_buf);
-                                            buffer_arc.recycle_buffer(scaled_buf);
-                                        }
-                                        if let Some(old_vf) = target_frame.replace(vf) {
-                                            buffer_arc.recycle_buffer(old_vf.data);
-                                        }
-                                        if pts >= target_pts {
-                                            break;
-                                        }
+                            let pooled_buf = buffer_arc.acquire_buffer(frame_bytes);
+                            match dec.next_video_frame_at_or_after_with_buffer(target_pts, pooled_buf) {
+                                Ok(Some(mut vf)) => {
+                                    decoder_pts.store(vf.pts, Ordering::SeqCst);
+                                    vf.ensure_rgba8();
+                                    if vf.width != actual_width || vf.height != actual_height {
+                                        let mut scaled_buf = buffer_arc.acquire_buffer(frame_bytes);
+                                        vf.downscale_into(actual_width, actual_height, &mut scaled_buf);
+                                        buffer_arc.recycle_buffer(scaled_buf);
                                     }
-                                    _ => break,
+                                    target_frame = Some(vf);
+                                }
+                                Ok(None) => {}
+                                Err(e) => {
+                                    eprintln!("[DEBUG DEC] Error seeking to target_pts: {:?}", e);
                                 }
                             }
 
@@ -479,6 +468,7 @@ impl PlaybackSession {
                                 let _ = dec.seek_pts(target_pts);
                                 let pooled_buf = buffer_arc.acquire_buffer(frame_bytes);
                                 if let Ok(Some(mut vf)) = dec.next_video_frame_with_buffer(pooled_buf) {
+                                    decoder_pts.store(vf.pts, Ordering::SeqCst);
                                     vf.ensure_rgba8();
                                     if vf.width != actual_width || vf.height != actual_height {
                                         let mut scaled_buf = buffer_arc.acquire_buffer(frame_bytes);
@@ -579,6 +569,26 @@ impl PlaybackSession {
                             match decode_res {
                                 Ok(Some(mut vf)) => {
                                     let seq = seq_count.fetch_add(1, Ordering::SeqCst) + 1;
+                                    decoder_pts.store(vf.pts, Ordering::SeqCst);
+
+                                    let master_pts = clock_arc.current_pts();
+                                    let tolerance_pts = ((FrameDropper::SYNC_TOLERANCE_MS as f64 / 1000.0) * clock_fps).round() as i64;
+
+                                    // Immediate silent soft drop in decoder loop:
+                                    // If actively playing and this frame is already behind the master clock,
+                                    // discard immediately without running expensive ensure_rgba8 or downscale!
+                                    if is_playing.load(Ordering::SeqCst)
+                                        && transport_state.load(Ordering::Acquire) == TransportState::Playing as u8
+                                        && vf.pts + tolerance_pts < master_pts
+                                    {
+                                        eprintln!(
+                                            "[DEBUG DEC] [Streaming Silent SoftDrop] Fast-dropped late frame PTS={} (master_pts={})",
+                                            vf.pts, master_pts
+                                        );
+                                        buffer_arc.recycle_buffer(vf.data);
+                                        continue;
+                                    }
+
                                     eprintln!(
                                         "[DEBUG DEC] [Streaming] Sequential frame decoded: PTS={} (total_sequential={})",
                                         vf.pts, seq
@@ -637,6 +647,7 @@ impl PlaybackSession {
                             drop(dec);
                             if let Ok(Some(mut vf)) = decode_res {
                                 let seq = seq_count.fetch_add(1, Ordering::SeqCst) + 1;
+                                decoder_pts.store(vf.pts, Ordering::SeqCst);
                                 eprintln!(
                                     "[DEBUG DEC] [Idle Pre-fill] Sequential frame decoded: PTS={} (total_sequential={})",
                                     vf.pts, seq
@@ -725,25 +736,48 @@ impl PlaybackSession {
 
                     // PreRoll Warm-up: keep MasterClock frozen and buffer frames
                     if current_transport == TransportState::PreRoll {
+                        let target = current_pts.load(Ordering::SeqCst);
+                        let tolerance_pts = ((FrameDropper::SYNC_TOLERANCE_MS as f64 / 1000.0) * clock_fps).round() as i64;
+
+                        // Purge any stale frames from before target
+                        while let Some((first_pts, _, _)) = buffer_arc.peek_front_with_successor() {
+                            if first_pts + tolerance_pts < target {
+                                eprintln!(
+                                    "[DEBUG EMIT] Purging stale frame PTS {} (< target {}) during PreRoll",
+                                    first_pts, target
+                                );
+                                buffer_arc.drop_front();
+                            } else {
+                                break;
+                            }
+                        }
+
                         let buf_len = buffer_arc.len();
                         let is_eos = buffer_arc.is_eos();
                         let is_full = buffer_arc.is_full();
 
-                        let is_ready = buf_len >= PREROLL_HIGH_WATER_MARK
+                        let front_valid = buffer_arc
+                            .peek_front_with_successor()
+                            .map_or(false, |(first_pts, _, _)| first_pts + tolerance_pts >= target);
+
+                        let is_ready = front_valid && (
+                            buf_len >= PREROLL_HIGH_WATER_MARK
                             || is_eos
                             || is_full
-                            || (buf_len > 0 && buffer_arc.highest_buffered_pts() >= Some(duration_pts))
-                            || (buf_len > 0 && preroll_start.elapsed() >= Duration::from_millis(300));
+                            || buffer_arc.highest_buffered_pts() >= Some(duration_pts)
+                            || (buf_len >= 4 && preroll_start.elapsed() >= Duration::from_millis(1500))
+                        );
 
                         if is_ready && buf_len > 0 {
                             if let Some((first_pts, _, _)) = buffer_arc.peek_front_with_successor() {
-                                clock_arc.start(first_pts);
-                                current_pts.store(first_pts, Ordering::SeqCst);
+                                let start_pts = first_pts.max(target);
+                                clock_arc.start(start_pts);
+                                current_pts.store(start_pts, Ordering::SeqCst);
                                 transport_state
                                     .store(TransportState::Playing as u8, Ordering::Release);
                                 eprintln!(
                                     "[DEBUG EMIT] PreRoll warm-up complete: buffered {} frames, clock started at PTS {}",
-                                    buf_len, first_pts
+                                    buf_len, start_pts
                                 );
                             }
                         } else if is_eos && buf_len == 0 {
@@ -755,7 +789,7 @@ impl PlaybackSession {
                             session.broadcast_state();
                             continue;
                         } else {
-                            // Still warming up: do NOT drop frames; yield to decoder
+                            // Still warming up: keep master clock frozen at target! Yield to decoder
                             thread::sleep(Duration::from_millis(2));
                             continue;
                         }
@@ -792,9 +826,19 @@ impl PlaybackSession {
                                     continue;
                                 }
                                 FrameAction::HardDrop { target_pts } => {
+                                    let keyframe_pts = session.nearest_keyframe_pts(target_pts);
+                                    let current_dec = session.decoder_pts.load(Ordering::SeqCst);
+                                    if keyframe_pts <= current_dec {
+                                        eprintln!(
+                                            "[DEBUG EMIT] HardDrop suppressed (target_pts={}, keyframe_pts={} <= decoder_pts={}). Falling back to soft drop.",
+                                            target_pts, keyframe_pts, current_dec
+                                        );
+                                        buffer_arc.drop_front();
+                                        continue;
+                                    }
                                     eprintln!(
-                                        "[DEBUG EMIT] Frame HARD DROP! Recovering via .index: target_pts: {}, master_pts: {}",
-                                        target_pts, master_pts
+                                        "[DEBUG EMIT] Frame HARD DROP! Recovering via .index: target_pts: {}, keyframe_pts: {}, master_pts: {}",
+                                        target_pts, keyframe_pts, master_pts
                                     );
                                     session.trigger_hard_drop(target_pts);
                                     thread::sleep(Duration::from_millis(4));
@@ -869,11 +913,21 @@ impl PlaybackSession {
                                 if delta_ms > FrameDropper::HARD_DROP_THRESHOLD_MS as i64 {
                                     let action = session.frame_dropper.evaluate_delta(delta_ms, false, master_pts);
                                     if let FrameAction::HardDrop { target_pts } = action {
-                                        eprintln!(
-                                            "[DEBUG EMIT] Starvation HARD DROP! target_pts: {}, master_pts: {}",
-                                            target_pts, master_pts
-                                        );
-                                        session.trigger_hard_drop(target_pts);
+                                        let keyframe_pts = session.nearest_keyframe_pts(target_pts);
+                                        let current_dec = session.decoder_pts.load(Ordering::SeqCst);
+                                        if keyframe_pts > current_dec {
+                                            eprintln!(
+                                                "[DEBUG EMIT] Starvation HARD DROP! target_pts: {}, keyframe_pts: {}, master_pts: {}",
+                                                target_pts, keyframe_pts, master_pts
+                                            );
+                                            session.trigger_hard_drop(target_pts);
+                                        } else {
+                                            eprintln!(
+                                                "[DEBUG EMIT] Starvation HardDrop suppressed (keyframe_pts {} <= decoder_pts {}). Allowing sequential decode.",
+                                                keyframe_pts, current_dec
+                                            );
+                                            thread::sleep(Duration::from_millis(4));
+                                        }
                                     }
                                 }
                                 thread::sleep(Duration::from_millis(2));
@@ -1019,6 +1073,15 @@ impl PlaybackSession {
             return;
         }
         let clamped_pts = target_pts.clamp(0, self.duration_pts);
+        let keyframe_pts = self.nearest_keyframe_pts(clamped_pts);
+        let current_dec = self.decoder_pts.load(Ordering::SeqCst);
+        if keyframe_pts <= current_dec {
+            eprintln!(
+                "[DEBUG DEC] HardDrop SUPPRESSED: target_pts={}, keyframe_pts={} <= current_decoder_pts={}. Continuing sequential decode without backwards seek.",
+                target_pts, keyframe_pts, current_dec
+            );
+            return;
+        }
         let new_epoch = self.current_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         self.lookahead_buffer.flush_and_set_epoch(new_epoch);
         if self.is_playing.load(Ordering::SeqCst) {
@@ -1300,6 +1363,7 @@ impl SessionRegistry {
             is_playing: Arc::new(AtomicBool::new(false)),
             transport_state: Arc::new(AtomicU8::new(TransportState::Paused as u8)),
             current_pts: Arc::new(AtomicI64::new(0)),
+            decoder_pts: Arc::new(AtomicI64::new(if initial_frame.is_some() { 0 } else { -1 })),
             lookahead_buffer,
             master_clock,
             frame_index,

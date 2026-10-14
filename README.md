@@ -184,7 +184,7 @@ Aether/
 
 O Aether conta com uma infraestrutura rigorosa de testes cobrindo múltiplos níveis:
 
-1. **Rust Core, Media & Bridge Unit/Stress Tests (116+ testes):**
+1. **Rust Core, Media & Bridge Unit/Stress Tests (117+ testes):**
    - Validação de layout binário `#[repr(C)]` de 24 bytes (`FrameIndexEntry` e `ThumbnailIndexEntry`), serialização/desserialização `.fidx` e `.atlas`, e busca binária $O(\log N)$ com tolerância a limites (`pts < 0`, entre P/B-frames, `i64::MAX`, streams vazias e orçamento < 5ms).
    - Testes de cálculo de picos de áudio (`min`, `max`, `rms`) com buffers PCM sintéticos (silêncio, onda senoidal pura com $\text{RMS} = 1/\sqrt{2}$, clipping em amplitude máxima e resistência a `NaN`/`Inf`), geração de pirâmide multi-LOD e leitura seletiva por nível.
    - Validação dos contratos FFI (`import_media`, `create_preview_session`, `create_preview_session_with_max_size` e `get_audio_waveform` através de múltiplos níveis LOD) em `aether_bridge`.
@@ -194,8 +194,10 @@ O Aether conta com uma infraestrutura rigorosa de testes cobrindo múltiplos ní
    - Fuzzing de contêineres danificados, arquivos truncados, `timescale == 0` e cabeçalhos corrompidos sem `panic!`.
    - **Suíte de Reprodução e Estresse Multithread (`playback_tests.rs`, `playback_engine_concurrency_test.rs`):**
      - Leitura contínua estritamente sequencial sem seeks por frame (`test_continuous_playback_single_initial_seek_and_strictly_sequential_reads`).
+     - Supressão de seeks regressivos (`test_hard_drop_regression_suppression_and_sequential_continuity`) impedindo espirais de seeks para `keyframe_pts=0` quando o decodificador já superou a posição do keyframe.
+     - Fast-forward e catch-up silencioso via hardware no AVFoundation (`avf_decoder_next_frame_at_or_after`) sem travar pixel buffers, sem malloc/memcpy e sem conversão de cor ou downscaling em quadros descartados.
      - Descarte seletivo do `FrameDropper` (*Soft Drop* preservando referências P/B vs. *Hard Drop* com recuperação via `.fidx`).
-     - Warm-up com fase de `PreRoll` e zero frame drops no início do playback (`test_preroll_zero_frame_drops_on_playback_start`).
+     - Warm-up com fase de `PreRoll`, expurgo de quadros atrasados, verificação de high-water mark e relógio congelado no timestamp inicial (`test_preroll_zero_frame_drops_on_playback_start`).
      - Leitura 100% lock-free do `MasterClock` por leitores concorrentes (`test_master_clock_lock_free_concurrent_readers`).
      - Zero alocações de heap durante reprodução contínua com canal SPSC e `FrameBufferPool` (`test_zero_allocation_decoding_loop_continuous_playback`).
      - Downscale nativo de proxy 720p com verificação matemática de economia de banda de até 88.9% em 4K e 55.6% em 1080p (`test_preview_proxy_downscaling_and_bandwidth_reduction`).

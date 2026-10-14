@@ -109,7 +109,7 @@ void* avf_decoder_create_with_max_size(const char* file_path, uint32_t max_width
         NSMutableDictionary *settings = [NSMutableDictionary dictionaryWithDictionary:@{
             (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)
         }];
-        if (target_w != orig_w || target_h != orig_h) {
+        if (target_w > 0 && target_h > 0) {
             settings[(id)kCVPixelBufferWidthKey] = @(target_w);
             settings[(id)kCVPixelBufferHeightKey] = @(target_h);
         }
@@ -201,6 +201,83 @@ int avf_decoder_next_frame(void* handle, AvfRawFrame* out_frame) {
     }
 }
 
+int avf_decoder_next_frame_at_or_after(void* handle, int64_t min_pts_value, int32_t min_pts_timescale, AvfRawFrame* out_frame) {
+    if (!handle || !out_frame) return -1;
+    AvfBridgeDecoder *dec = (__bridge AvfBridgeDecoder*)handle;
+
+    @autoreleasepool {
+        CMTime minTime = min_pts_timescale > 0 ? CMTimeMake(min_pts_value, min_pts_timescale) : kCMTimeZero;
+
+        while (1) {
+            CMSampleBufferRef sampleBuffer = [dec.output copyNextSampleBuffer];
+            if (!sampleBuffer) {
+                if (dec.reader.status == AVAssetReaderStatusFailed) {
+                    return -1;
+                }
+                return 0; // End of stream or reading completed
+            }
+
+            CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+            if (min_pts_timescale > 0 && CMTimeCompare(pts, minTime) < 0) {
+                // PTS is before target: skip pixel lock, malloc, and memcpy!
+                CFRelease(sampleBuffer);
+                continue;
+            }
+
+            CMTime duration = CMSampleBufferGetDuration(sampleBuffer);
+
+            int32_t isKeyframe = 1;
+            CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, false);
+            if (attachments != NULL && CFArrayGetCount(attachments) > 0) {
+                CFDictionaryRef dict = (CFDictionaryRef)CFArrayGetValueAtIndex(attachments, 0);
+                if (dict != NULL) {
+                    CFBooleanRef notSync = (CFBooleanRef)CFDictionaryGetValue(dict, kCMSampleAttachmentKey_NotSync);
+                    if (notSync != NULL && CFBooleanGetValue(notSync)) {
+                        isKeyframe = 0;
+                    }
+                }
+            }
+
+            CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+            if (!imageBuffer) {
+                CFRelease(sampleBuffer);
+                return -1;
+            }
+
+            CVPixelBufferLockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
+            uint32_t width = (uint32_t)CVPixelBufferGetWidth(imageBuffer);
+            uint32_t height = (uint32_t)CVPixelBufferGetHeight(imageBuffer);
+            uint32_t bytesPerRow = (uint32_t)CVPixelBufferGetBytesPerRow(imageBuffer);
+            uint8_t *baseAddr = (uint8_t*)CVPixelBufferGetBaseAddress(imageBuffer);
+
+            size_t totalBytes = (size_t)bytesPerRow * height;
+            uint8_t *copyData = (uint8_t*)malloc(totalBytes);
+            if (!copyData) {
+                CVPixelBufferUnlockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
+                CFRelease(sampleBuffer);
+                return -1;
+            }
+            memcpy(copyData, baseAddr, totalBytes);
+
+            CVPixelBufferUnlockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
+            CFRelease(sampleBuffer);
+
+            out_frame->width = width;
+            out_frame->height = height;
+            out_frame->bytes_per_row = bytesPerRow;
+            out_frame->pts_value = pts.value;
+            out_frame->pts_timescale = pts.timescale;
+            out_frame->duration_value = duration.value;
+            out_frame->duration_timescale = duration.timescale;
+            out_frame->is_keyframe = isKeyframe;
+            out_frame->data = copyData;
+            out_frame->data_len = totalBytes;
+
+            return 1; // Frame decoded successfully
+        }
+    }
+}
+
 void avf_decoder_free_frame(AvfRawFrame* frame) {
     if (frame && frame->data) {
         free(frame->data);
@@ -226,9 +303,7 @@ int avf_decoder_seek_pts(void* handle, int64_t target_value, int32_t target_time
         NSMutableDictionary *settings = [NSMutableDictionary dictionaryWithDictionary:@{
             (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)
         }];
-        if (dec.targetWidth > 0 && dec.targetHeight > 0 &&
-            (dec.targetWidth != (uint32_t)dec.videoTrack.naturalSize.width ||
-             dec.targetHeight != (uint32_t)dec.videoTrack.naturalSize.height)) {
+        if (dec.targetWidth > 0 && dec.targetHeight > 0) {
             settings[(id)kCVPixelBufferWidthKey] = @(dec.targetWidth);
             settings[(id)kCVPixelBufferHeightKey] = @(dec.targetHeight);
         }

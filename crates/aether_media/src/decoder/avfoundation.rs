@@ -49,6 +49,12 @@ mod native {
             err_len: usize,
         ) -> *mut c_void;
         fn avf_decoder_next_frame(handle: *mut c_void, out_frame: *mut AvfRawFrame) -> i32;
+        fn avf_decoder_next_frame_at_or_after(
+            handle: *mut c_void,
+            min_pts_value: i64,
+            min_pts_timescale: i32,
+            out_frame: *mut AvfRawFrame,
+        ) -> i32;
         fn avf_decoder_free_frame(frame: *mut AvfRawFrame);
         fn avf_decoder_seek_pts(
             handle: *mut c_void,
@@ -219,6 +225,79 @@ mod native {
                         self.timebase.num as f64 / self.timebase.den as f64
                     } else {
                         60.0
+                    };
+
+                    let sec = if raw.pts_timescale != 0 {
+                        raw.pts_value as f64 / raw.pts_timescale as f64
+                    } else {
+                        0.0
+                    };
+                    let pts = (sec * fps_ratio).round() as i64;
+
+                    let dur_sec = if raw.duration_timescale != 0 {
+                        raw.duration_value as f64 / raw.duration_timescale as f64
+                    } else {
+                        1.0 / self.fps
+                    };
+                    let duration_pts = (dur_sec * fps_ratio).round().max(1.0) as i64;
+
+                    let mut frame = VideoFrame {
+                        width: raw.width,
+                        height: raw.height,
+                        format: PixelFormat::Bgra8,
+                        data,
+                        row_stride_bytes: raw.bytes_per_row,
+                        pts,
+                        duration_pts,
+                        timebase: self.timebase,
+                        is_keyframe: raw.is_keyframe != 0,
+                    };
+                    frame.ensure_rgba8();
+                    Ok(Some(frame))
+                }
+                _ => Err(DecoderError::DecodeError(
+                    "AVAssetReader failed decoding frame".to_string(),
+                )),
+            }
+        }
+
+        fn next_frame_at_or_after_with_buffer(
+            &mut self,
+            min_pts: i64,
+            mut buffer: Vec<u8>,
+        ) -> DecoderResult<Option<VideoFrame>> {
+            let fps_ratio = if self.timebase.den != 0 && self.timebase.num > 0 {
+                self.timebase.num as f64 / self.timebase.den as f64
+            } else {
+                60.0
+            };
+            let sec = (min_pts.max(0) as f64 / fps_ratio).max(0.0);
+            let min_timescale = 600;
+            let min_value = (sec * min_timescale as f64).round() as i64;
+
+            let mut raw = std::mem::MaybeUninit::<AvfRawFrame>::uninit();
+            let res = unsafe {
+                avf_decoder_next_frame_at_or_after(
+                    self.handle,
+                    min_value,
+                    min_timescale,
+                    raw.as_mut_ptr(),
+                )
+            };
+
+            match res {
+                0 => Ok(None),
+                1 => {
+                    let mut raw = unsafe { raw.assume_init() };
+                    let data = unsafe {
+                        let slice = std::slice::from_raw_parts(raw.data, raw.data_len);
+                        buffer.clear();
+                        if buffer.capacity() < raw.data_len {
+                            buffer.reserve(raw.data_len - buffer.capacity());
+                        }
+                        buffer.extend_from_slice(slice);
+                        avf_decoder_free_frame(&mut raw);
+                        buffer
                     };
 
                     let sec = if raw.pts_timescale != 0 {

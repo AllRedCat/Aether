@@ -42,6 +42,29 @@ pub trait VideoDecoder: Send + Sync {
         self.next_frame()
     }
 
+    /// Decodes the next sequential frame at or after `min_pts`, skipping earlier frames cheaply.
+    fn next_frame_at_or_after(&mut self, min_pts: i64) -> DecoderResult<Option<VideoFrame>> {
+        self.next_frame_at_or_after_with_buffer(min_pts, Vec::new())
+    }
+
+    /// Decodes the next sequential frame at or after `min_pts` reusing a pre-allocated pixel buffer.
+    fn next_frame_at_or_after_with_buffer(
+        &mut self,
+        min_pts: i64,
+        buffer: Vec<u8>,
+    ) -> DecoderResult<Option<VideoFrame>> {
+        let mut buf = buffer;
+        loop {
+            match self.next_frame_with_buffer(buf)? {
+                Some(f) if f.pts < min_pts => {
+                    buf = f.data;
+                    continue;
+                }
+                other => return Ok(other),
+            }
+        }
+    }
+
     /// Seeks the video stream to the target presentation timestamp (random access).
     fn seek_pts(&mut self, target_pts: i64) -> DecoderResult<()>;
 
@@ -158,6 +181,23 @@ pub trait MediaDecoder: Send + Sync {
     fn next_video_frame_with_buffer(&mut self, buffer: Vec<u8>) -> DecoderResult<Option<VideoFrame>> {
         match self.video() {
             Some(v) => v.next_frame_with_buffer(buffer),
+            None => Err(DecoderError::NoVideoStream),
+        }
+    }
+
+    /// Convenience method to decode the next video frame at or after `min_pts`.
+    fn next_video_frame_at_or_after(&mut self, min_pts: i64) -> DecoderResult<Option<VideoFrame>> {
+        self.next_video_frame_at_or_after_with_buffer(min_pts, Vec::new())
+    }
+
+    /// Convenience method to decode the next video frame at or after `min_pts` reusing a pre-allocated pixel buffer.
+    fn next_video_frame_at_or_after_with_buffer(
+        &mut self,
+        min_pts: i64,
+        buffer: Vec<u8>,
+    ) -> DecoderResult<Option<VideoFrame>> {
+        match self.video() {
+            Some(v) => v.next_frame_at_or_after_with_buffer(min_pts, buffer),
             None => Err(DecoderError::NoVideoStream),
         }
     }

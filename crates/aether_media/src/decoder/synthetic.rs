@@ -285,6 +285,23 @@ impl VideoDecoder for SyntheticVideoDecoder {
         Ok(Some(frame))
     }
 
+    fn next_frame_at_or_after_with_buffer(
+        &mut self,
+        min_pts: i64,
+        buffer: Vec<u8>,
+    ) -> DecoderResult<Option<VideoFrame>> {
+        let timeline_fps = if self.timebase.den != 0 && self.timebase.num > 0 {
+            self.timebase.num as f64 / self.timebase.den as f64
+        } else {
+            60.0
+        };
+        let target_frame = ((min_pts as f64 / timeline_fps) * self.fps).floor() as i64;
+        if self.current_frame < target_frame {
+            self.current_frame = target_frame.clamp(0, self.total_frames as i64);
+        }
+        self.next_frame_with_buffer(buffer)
+    }
+
     fn seek_pts(&mut self, target_pts: i64) -> DecoderResult<()> {
         if target_pts < 0 {
             self.current_frame = 0;

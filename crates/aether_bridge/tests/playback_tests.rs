@@ -1075,4 +1075,55 @@ fn test_preview_proxy_downscaling_and_bandwidth_reduction() {
     close_preview_session(info.session_id).expect("Close session");
 }
 
+#[test]
+fn test_hard_drop_regression_suppression_and_sequential_continuity() {
+    let synthetic_uri = "synthetic://regression_test?width=640&height=360&fps=30&duration=5.0";
+    let info = create_preview_session(synthetic_uri.to_string())
+        .expect("Create session");
+
+    let session = SessionRegistry::global()
+        .get_session(&info.session_id)
+        .expect("Active session");
+
+    // Initially after creation, seek_count is 1 (for initial frame PTS 0)
+    let _initial_seeks = session.seek_count();
+
+    // Start playback
+    preview_play(info.session_id.clone()).expect("Play");
+    thread::sleep(Duration::from_millis(300));
+
+    // The decoder should have progressed
+    let dec_pts = session.decoder_pts.load(Ordering::SeqCst);
+    assert!(dec_pts > 0, "Decoder PTS should have progressed beyond 0, got {}", dec_pts);
+
+    let seeks_before = session.seek_count();
+
+    // Now attempt to trigger a HardDrop to a target whose nearest keyframe is <= dec_pts (e.g. target_pts = 10, keyframe = 0)
+    // For synthetic video, keyframe is at 0. Since dec_pts > 0, keyframe_pts (0) <= dec_pts.
+    session.trigger_hard_drop(10);
+
+    // Yield briefly
+    thread::sleep(Duration::from_millis(100));
+
+    // CRITICAL: HardDrop seek must be SUPPRESSED! seek_count must NOT have increased!
+    let seeks_after = session.seek_count();
+    assert_eq!(
+        seeks_after, seeks_before,
+        "HardDrop with keyframe <= decoder_pts must be suppressed without seeking backwards!"
+    );
+
+    // Decoder PTS must NOT have regressed to 0!
+    let dec_pts_after = session.decoder_pts.load(Ordering::SeqCst);
+    assert!(
+        dec_pts_after >= dec_pts,
+        "Decoder PTS must not regress! Previous: {}, Now: {}",
+        dec_pts,
+        dec_pts_after
+    );
+
+    preview_pause(info.session_id.clone()).expect("Pause");
+    close_preview_session(info.session_id).expect("Close session");
+}
+
+
 
