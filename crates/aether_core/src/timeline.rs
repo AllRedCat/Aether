@@ -1,3 +1,6 @@
+pub mod db;
+pub mod persistence;
+
 use uuid::Uuid;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
