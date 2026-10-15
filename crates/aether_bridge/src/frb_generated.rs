@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.3.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -369050;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 719333901;
 
 // Section: executor
 
@@ -281,6 +281,45 @@ fn wire__crate__api__create_preview_session_impl(
         },
     )
 }
+fn wire__crate__api__create_preview_session_with_max_size_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "create_preview_session_with_max_size",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_file_path = <String>::sse_decode(&mut deserializer);
+            let api_max_width = <Option<u32>>::sse_decode(&mut deserializer);
+            let api_max_height = <Option<u32>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::create_preview_session_with_max_size(
+                        api_file_path,
+                        api_max_width,
+                        api_max_height,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__create_project_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -415,6 +454,38 @@ fn wire__crate__api__generate_audio_peaks_impl(
                         api_media_id,
                         api_samples_per_peak,
                     )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__get_active_project_file_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_active_project_file",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok(crate::api::get_active_project_file())?;
                     Ok(output_ok)
                 })())
             }
@@ -957,6 +1028,41 @@ fn wire__crate__api__save_project_impl(
         },
     )
 }
+fn wire__crate__api__set_active_project_file_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_active_project_file",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_path = <Option<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::set_active_project_file(api_path);
+                    })?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__start_media_analysis_stream_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1100,6 +1206,187 @@ fn wire__crate__api__subscribe_preview_frames_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::subscribe_preview_frames(api_session_id, api_sink)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__timeline_api__create_new_timeline_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "create_new_timeline",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_name = <String>::sse_decode(&mut deserializer);
+            let api_width = <u32>::sse_decode(&mut deserializer);
+            let api_height = <u32>::sse_decode(&mut deserializer);
+            let api_fps_num = <i32>::sse_decode(&mut deserializer);
+            let api_fps_den = <i32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::timeline_api::create_new_timeline(
+                        api_name,
+                        api_width,
+                        api_height,
+                        api_fps_num,
+                        api_fps_den,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__timeline_api__create_track_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "create_track",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_timeline_id = <String>::sse_decode(&mut deserializer);
+            let api_is_video = <bool>::sse_decode(&mut deserializer);
+            let api_name = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::timeline_api::create_track(
+                        api_timeline_id,
+                        api_is_video,
+                        api_name,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__timeline_api__delete_timeline_by_id_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "delete_timeline_by_id",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_timeline_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::timeline_api::delete_timeline_by_id(api_timeline_id)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__timeline_api__get_project_timelines_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_project_timelines",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::timeline_api::get_project_timelines()?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__timeline_api__load_timeline_state_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "load_timeline_state",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_timeline_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::timeline_api::load_timeline_state(api_timeline_id)?;
                     Ok(output_ok)
                 })())
             }
@@ -1335,6 +1622,21 @@ impl SseDecode for f64 {
     }
 }
 
+impl SseDecode for crate::api::timeline_api::FullTimelineStateDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_timeline = <crate::api::timeline_api::TimelineDto>::sse_decode(deserializer);
+        let mut var_tracks = <Vec<crate::api::timeline_api::TrackDto>>::sse_decode(deserializer);
+        let mut var_clips =
+            <Vec<crate::api::timeline_api::TimelineClipDto>>::sse_decode(deserializer);
+        return crate::api::timeline_api::FullTimelineStateDto {
+            timeline: var_timeline,
+            tracks: var_tracks,
+            clips: var_clips,
+        };
+    }
+}
+
 impl SseDecode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1447,6 +1749,34 @@ impl SseDecode for Vec<u8> {
     }
 }
 
+impl SseDecode for Vec<crate::api::timeline_api::TimelineClipDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::timeline_api::TimelineClipDto>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::timeline_api::TimelineDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::timeline_api::TimelineDto>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<crate::api::Track> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1454,6 +1784,20 @@ impl SseDecode for Vec<crate::api::Track> {
         let mut ans_ = vec![];
         for idx_ in 0..len_ {
             ans_.push(<crate::api::Track>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::timeline_api::TrackDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::timeline_api::TrackDto>::sse_decode(
+                deserializer,
+            ));
         }
         return ans_;
     }
@@ -1817,6 +2161,54 @@ impl SseDecode for crate::api::Timeline {
     }
 }
 
+impl SseDecode for crate::api::timeline_api::TimelineClipDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_trackId = <String>::sse_decode(deserializer);
+        let mut var_assetId = <String>::sse_decode(deserializer);
+        let mut var_timelineStartFrame = <i64>::sse_decode(deserializer);
+        let mut var_inFrame = <i64>::sse_decode(deserializer);
+        let mut var_outFrame = <i64>::sse_decode(deserializer);
+        let mut var_speed = <f64>::sse_decode(deserializer);
+        return crate::api::timeline_api::TimelineClipDto {
+            id: var_id,
+            track_id: var_trackId,
+            asset_id: var_assetId,
+            timeline_start_frame: var_timelineStartFrame,
+            in_frame: var_inFrame,
+            out_frame: var_outFrame,
+            speed: var_speed,
+        };
+    }
+}
+
+impl SseDecode for crate::api::timeline_api::TimelineDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_fpsNum = <i32>::sse_decode(deserializer);
+        let mut var_fpsDen = <i32>::sse_decode(deserializer);
+        let mut var_width = <u32>::sse_decode(deserializer);
+        let mut var_height = <u32>::sse_decode(deserializer);
+        let mut var_durationFrames = <i64>::sse_decode(deserializer);
+        let mut var_createdAt = <String>::sse_decode(deserializer);
+        let mut var_updatedAt = <String>::sse_decode(deserializer);
+        return crate::api::timeline_api::TimelineDto {
+            id: var_id,
+            name: var_name,
+            fps_num: var_fpsNum,
+            fps_den: var_fpsDen,
+            width: var_width,
+            height: var_height,
+            duration_frames: var_durationFrames,
+            created_at: var_createdAt,
+            updated_at: var_updatedAt,
+        };
+    }
+}
+
 impl SseDecode for crate::api::Track {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1827,6 +2219,30 @@ impl SseDecode for crate::api::Track {
             id: var_id,
             kind: var_kind,
             clips: var_clips,
+        };
+    }
+}
+
+impl SseDecode for crate::api::timeline_api::TrackDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_timelineId = <String>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_trackType = <String>::sse_decode(deserializer);
+        let mut var_isVideo = <bool>::sse_decode(deserializer);
+        let mut var_orderIndex = <i32>::sse_decode(deserializer);
+        let mut var_isMuted = <bool>::sse_decode(deserializer);
+        let mut var_isLocked = <bool>::sse_decode(deserializer);
+        return crate::api::timeline_api::TrackDto {
+            id: var_id,
+            timeline_id: var_timelineId,
+            name: var_name,
+            track_type: var_trackType,
+            is_video: var_isVideo,
+            order_index: var_orderIndex,
+            is_muted: var_isMuted,
+            is_locked: var_isLocked,
         };
     }
 }
@@ -1892,30 +2308,63 @@ fn pde_ffi_dispatcher_primary_impl(
         4 => wire__crate__api__add_track_impl(port, ptr, rust_vec_len, data_len),
         5 => wire__crate__api__close_preview_session_impl(port, ptr, rust_vec_len, data_len),
         6 => wire__crate__api__create_preview_session_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__create_project_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__create_timeline_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__extract_single_frame_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__generate_audio_peaks_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__get_audio_waveform_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__get_media_items_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__get_media_pool_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__get_preview_state_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__get_timeline_thumbnail_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__import_media_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__import_media_asset_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__import_media_file_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__init_engine_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__inspect_media_file_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__load_project_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__preview_pause_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__preview_play_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__preview_seek_pts_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__preview_seek_seconds_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__save_project_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__start_media_analysis_stream_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__subscribe_import_progress_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__subscribe_playback_state_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__subscribe_preview_frames_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__create_preview_session_with_max_size_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        8 => wire__crate__api__create_project_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__create_timeline_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__extract_single_frame_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__generate_audio_peaks_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__get_active_project_file_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__get_audio_waveform_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__get_media_items_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__get_media_pool_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__get_preview_state_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__get_timeline_thumbnail_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__import_media_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__import_media_asset_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__import_media_file_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__init_engine_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__inspect_media_file_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__load_project_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__preview_pause_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__preview_play_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__preview_seek_pts_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__preview_seek_seconds_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__save_project_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__set_active_project_file_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__start_media_analysis_stream_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__subscribe_import_progress_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__subscribe_playback_state_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__subscribe_preview_frames_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__timeline_api__create_new_timeline_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        35 => wire__crate__api__timeline_api__create_track_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__timeline_api__delete_timeline_by_id_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        37 => wire__crate__api__timeline_api__get_project_timelines_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        38 => wire__crate__api__timeline_api__load_timeline_state_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
         _ => unreachable!(),
     }
 }
@@ -1990,6 +2439,28 @@ impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for FrbWrapper<
 impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::Clip>> for crate::api::Clip {
     fn into_into_dart(self) -> FrbWrapper<crate::api::Clip> {
         self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::timeline_api::FullTimelineStateDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.timeline.into_into_dart().into_dart(),
+            self.tracks.into_into_dart().into_dart(),
+            self.clips.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::timeline_api::FullTimelineStateDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::timeline_api::FullTimelineStateDto>
+    for crate::api::timeline_api::FullTimelineStateDto
+{
+    fn into_into_dart(self) -> crate::api::timeline_api::FullTimelineStateDto {
+        self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -2320,6 +2791,60 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::Timeline>> for cra
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::timeline_api::TimelineClipDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.track_id.into_into_dart().into_dart(),
+            self.asset_id.into_into_dart().into_dart(),
+            self.timeline_start_frame.into_into_dart().into_dart(),
+            self.in_frame.into_into_dart().into_dart(),
+            self.out_frame.into_into_dart().into_dart(),
+            self.speed.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::timeline_api::TimelineClipDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::timeline_api::TimelineClipDto>
+    for crate::api::timeline_api::TimelineClipDto
+{
+    fn into_into_dart(self) -> crate::api::timeline_api::TimelineClipDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::timeline_api::TimelineDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.name.into_into_dart().into_dart(),
+            self.fps_num.into_into_dart().into_dart(),
+            self.fps_den.into_into_dart().into_dart(),
+            self.width.into_into_dart().into_dart(),
+            self.height.into_into_dart().into_dart(),
+            self.duration_frames.into_into_dart().into_dart(),
+            self.created_at.into_into_dart().into_dart(),
+            self.updated_at.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::timeline_api::TimelineDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::timeline_api::TimelineDto>
+    for crate::api::timeline_api::TimelineDto
+{
+    fn into_into_dart(self) -> crate::api::timeline_api::TimelineDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::Track> {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -2334,6 +2859,33 @@ impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for FrbWrapper<
 impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::Track>> for crate::api::Track {
     fn into_into_dart(self) -> FrbWrapper<crate::api::Track> {
         self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::timeline_api::TrackDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.timeline_id.into_into_dart().into_dart(),
+            self.name.into_into_dart().into_dart(),
+            self.track_type.into_into_dart().into_dart(),
+            self.is_video.into_into_dart().into_dart(),
+            self.order_index.into_into_dart().into_dart(),
+            self.is_muted.into_into_dart().into_dart(),
+            self.is_locked.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::timeline_api::TrackDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::timeline_api::TrackDto>
+    for crate::api::timeline_api::TrackDto
+{
+    fn into_into_dart(self) -> crate::api::timeline_api::TrackDto {
+        self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -2471,6 +3023,15 @@ impl SseEncode for f64 {
     }
 }
 
+impl SseEncode for crate::api::timeline_api::FullTimelineStateDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::timeline_api::TimelineDto>::sse_encode(self.timeline, serializer);
+        <Vec<crate::api::timeline_api::TrackDto>>::sse_encode(self.tracks, serializer);
+        <Vec<crate::api::timeline_api::TimelineClipDto>>::sse_encode(self.clips, serializer);
+    }
+}
+
 impl SseEncode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2568,12 +3129,42 @@ impl SseEncode for Vec<u8> {
     }
 }
 
+impl SseEncode for Vec<crate::api::timeline_api::TimelineClipDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::timeline_api::TimelineClipDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::timeline_api::TimelineDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::timeline_api::TimelineDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<crate::api::Track> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::Track>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::timeline_api::TrackDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::timeline_api::TrackDto>::sse_encode(item, serializer);
         }
     }
 }
@@ -2840,12 +3431,54 @@ impl SseEncode for crate::api::Timeline {
     }
 }
 
+impl SseEncode for crate::api::timeline_api::TimelineClipDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.track_id, serializer);
+        <String>::sse_encode(self.asset_id, serializer);
+        <i64>::sse_encode(self.timeline_start_frame, serializer);
+        <i64>::sse_encode(self.in_frame, serializer);
+        <i64>::sse_encode(self.out_frame, serializer);
+        <f64>::sse_encode(self.speed, serializer);
+    }
+}
+
+impl SseEncode for crate::api::timeline_api::TimelineDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.name, serializer);
+        <i32>::sse_encode(self.fps_num, serializer);
+        <i32>::sse_encode(self.fps_den, serializer);
+        <u32>::sse_encode(self.width, serializer);
+        <u32>::sse_encode(self.height, serializer);
+        <i64>::sse_encode(self.duration_frames, serializer);
+        <String>::sse_encode(self.created_at, serializer);
+        <String>::sse_encode(self.updated_at, serializer);
+    }
+}
+
 impl SseEncode for crate::api::Track {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <uuid::Uuid>::sse_encode(self.id, serializer);
         <crate::api::TrackKind>::sse_encode(self.kind, serializer);
         <Vec<crate::api::Clip>>::sse_encode(self.clips, serializer);
+    }
+}
+
+impl SseEncode for crate::api::timeline_api::TrackDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.timeline_id, serializer);
+        <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.track_type, serializer);
+        <bool>::sse_encode(self.is_video, serializer);
+        <i32>::sse_encode(self.order_index, serializer);
+        <bool>::sse_encode(self.is_muted, serializer);
+        <bool>::sse_encode(self.is_locked, serializer);
     }
 }
 

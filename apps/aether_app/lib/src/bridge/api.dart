@@ -11,6 +11,12 @@ import 'package:uuid/uuid.dart';
 // These types are ignored because they are not used by any `pub` functions: `RegisteredAsset`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
+Future<String?> getActiveProjectFile() =>
+    RustLib.instance.api.crateApiGetActiveProjectFile();
+
+Future<void> setActiveProjectFile({String? path}) =>
+    RustLib.instance.api.crateApiSetActiveProjectFile(path: path);
+
 Future<void> initEngine() => RustLib.instance.api.crateApiInitEngine();
 
 Future<Project> createProject(
@@ -160,9 +166,15 @@ Future<Project> addClipFromMediaPool(
 
 /// Opens a media asset, extracts container metadata, pre-fetches the initial frame at PTS 0,
 /// allocates a unique texture ID for Flutter's `Texture(textureId: ...)` widget,
-/// and registers the active playback session in the `SessionRegistry`.
+/// and registers the active playback session in the `SessionRegistry` with proxy downscaling.
 Future<PreviewSessionInfo> createPreviewSession({required String filePath}) =>
     RustLib.instance.api.crateApiCreatePreviewSession(filePath: filePath);
+
+/// Creates a preview playback session with explicit maximum preview width and height.
+Future<PreviewSessionInfo> createPreviewSessionWithMaxSize(
+        {required String filePath, int? maxWidth, int? maxHeight}) =>
+    RustLib.instance.api.crateApiCreatePreviewSessionWithMaxSize(
+        filePath: filePath, maxWidth: maxWidth, maxHeight: maxHeight);
 
 /// Closes the active playback session, terminates background ticker threads,
 /// drops active stream sinks, and frees all decoder memory.

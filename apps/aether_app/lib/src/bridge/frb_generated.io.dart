@@ -4,6 +4,7 @@
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
 import 'api.dart';
+import 'api/timeline_api.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
@@ -99,6 +100,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double dco_decode_f_64(dynamic raw);
 
   @protected
+  FullTimelineStateDto dco_decode_full_timeline_state_dto(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -126,7 +130,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<TimelineClipDto> dco_decode_list_timeline_clip_dto(dynamic raw);
+
+  @protected
+  List<TimelineDto> dco_decode_list_timeline_dto(dynamic raw);
+
+  @protected
   List<Track> dco_decode_list_track(dynamic raw);
+
+  @protected
+  List<TrackDto> dco_decode_list_track_dto(dynamic raw);
 
   @protected
   MediaAnalysisProgress dco_decode_media_analysis_progress(dynamic raw);
@@ -198,7 +211,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Timeline dco_decode_timeline(dynamic raw);
 
   @protected
+  TimelineClipDto dco_decode_timeline_clip_dto(dynamic raw);
+
+  @protected
+  TimelineDto dco_decode_timeline_dto(dynamic raw);
+
+  @protected
   Track dco_decode_track(dynamic raw);
+
+  @protected
+  TrackDto dco_decode_track_dto(dynamic raw);
 
   @protected
   TrackKind dco_decode_track_kind(dynamic raw);
@@ -300,6 +322,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double sse_decode_f_64(SseDeserializer deserializer);
 
   @protected
+  FullTimelineStateDto sse_decode_full_timeline_state_dto(
+      SseDeserializer deserializer);
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -328,7 +354,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<TimelineClipDto> sse_decode_list_timeline_clip_dto(
+      SseDeserializer deserializer);
+
+  @protected
+  List<TimelineDto> sse_decode_list_timeline_dto(SseDeserializer deserializer);
+
+  @protected
   List<Track> sse_decode_list_track(SseDeserializer deserializer);
+
+  @protected
+  List<TrackDto> sse_decode_list_track_dto(SseDeserializer deserializer);
 
   @protected
   MediaAnalysisProgress sse_decode_media_analysis_progress(
@@ -406,7 +442,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Timeline sse_decode_timeline(SseDeserializer deserializer);
 
   @protected
+  TimelineClipDto sse_decode_timeline_clip_dto(SseDeserializer deserializer);
+
+  @protected
+  TimelineDto sse_decode_timeline_dto(SseDeserializer deserializer);
+
+  @protected
   Track sse_decode_track(SseDeserializer deserializer);
+
+  @protected
+  TrackDto sse_decode_track_dto(SseDeserializer deserializer);
 
   @protected
   TrackKind sse_decode_track_kind(SseDeserializer deserializer);
@@ -510,6 +555,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_f_64(double self, SseSerializer serializer);
 
   @protected
+  void sse_encode_full_timeline_state_dto(
+      FullTimelineStateDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -542,7 +591,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       Uint8List self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_timeline_clip_dto(
+      List<TimelineClipDto> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_timeline_dto(
+      List<TimelineDto> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_track(List<Track> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_track_dto(List<TrackDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_media_analysis_progress(
@@ -622,7 +682,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_timeline(Timeline self, SseSerializer serializer);
 
   @protected
+  void sse_encode_timeline_clip_dto(
+      TimelineClipDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_timeline_dto(TimelineDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_track(Track self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_track_dto(TrackDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_track_kind(TrackKind self, SseSerializer serializer);
