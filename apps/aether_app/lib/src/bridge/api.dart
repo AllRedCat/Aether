@@ -9,7 +9,7 @@ import 'package:uuid/uuid.dart';
 
 // These functions are ignored because they are not marked as `pub`: `default_standalone_cache_mgr`, `emit_import_progress`, `ingest_and_schedule_caches`, `register_media_item_in_cache`, `register_project_assets`, `resolve_cache_manager`, `spawn_background_asset_indexing`
 // These types are ignored because they are not used by any `pub` functions: `RegisteredAsset`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 Future<void> initEngine() => RustLib.instance.api.crateApiInitEngine();
 
@@ -22,6 +22,27 @@ Future<Project> loadProject({required String filePath}) =>
 
 Future<void> saveProject({required Project project}) =>
     RustLib.instance.api.crateApiSaveProject(project: project);
+
+/// Creates a new document bundle at `bundle_path` (`<name>.aether`),
+/// ensures bundle and cache directories exist (`cache/{index,peaks,thumbs}`),
+/// initializes `project.db` with WAL mode and foreign keys enabled,
+/// records `project_name` in `project_meta`, sets the active bundle,
+/// and returns the [`ProjectMetadata`].
+Future<ProjectMetadata> createProjectBundle(
+        {required String bundlePath, required String projectName}) =>
+    RustLib.instance.api.crateApiCreateProjectBundle(
+        bundlePath: bundlePath, projectName: projectName);
+
+/// Opens an existing document bundle at `bundle_path` (`<name>.aether`),
+/// validates that `project.db` exists, ensures cache directories exist
+/// (re-creating them if the user cleared the cache), opens the SQLite connection,
+/// sets the active bundle, and returns the project metadata.
+Future<ProjectMetadata> openProjectBundle({required String bundlePath}) =>
+    RustLib.instance.api.crateApiOpenProjectBundle(bundlePath: bundlePath);
+
+/// Returns the path to the currently active bundle root, if any.
+Future<String?> getActiveBundlePath() =>
+    RustLib.instance.api.crateApiGetActiveBundlePath();
 
 Future<Timeline> createTimeline() =>
     RustLib.instance.api.crateApiCreateTimeline();
@@ -160,9 +181,15 @@ Future<Project> addClipFromMediaPool(
 
 /// Opens a media asset, extracts container metadata, pre-fetches the initial frame at PTS 0,
 /// allocates a unique texture ID for Flutter's `Texture(textureId: ...)` widget,
-/// and registers the active playback session in the `SessionRegistry`.
+/// and registers the active playback session in the `SessionRegistry` with proxy downscaling.
 Future<PreviewSessionInfo> createPreviewSession({required String filePath}) =>
     RustLib.instance.api.crateApiCreatePreviewSession(filePath: filePath);
+
+/// Creates a preview playback session with explicit maximum preview width and height.
+Future<PreviewSessionInfo> createPreviewSessionWithMaxSize(
+        {required String filePath, int? maxWidth, int? maxHeight}) =>
+    RustLib.instance.api.crateApiCreatePreviewSessionWithMaxSize(
+        filePath: filePath, maxWidth: maxWidth, maxHeight: maxHeight);
 
 /// Closes the active playback session, terminates background ticker threads,
 /// drops active stream sinks, and frees all decoder memory.
@@ -778,6 +805,35 @@ class Project {
           filePath == other.filePath &&
           timeline == other.timeline &&
           mediaPool == other.mediaPool;
+}
+
+/// Project bundle metadata exposed across the FFI boundary to Flutter.
+class ProjectMetadata {
+  final String id;
+  final String name;
+  final String createdAt;
+  final String updatedAt;
+
+  const ProjectMetadata({
+    required this.id,
+    required this.name,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^ name.hashCode ^ createdAt.hashCode ^ updatedAt.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ProjectMetadata &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          createdAt == other.createdAt &&
+          updatedAt == other.updatedAt;
 }
 
 class Rational {

@@ -8,6 +8,7 @@ use flutter_rust_bridge::frb;
 pub use aether_core::timeline::{Clip, Rational, Timeline, Track, TrackKind};
 pub use aether_core::project::Project;
 pub use aether_core::media::{MediaItem, MediaMetadata, MediaPool, MediaTechInfo, MediaType};
+pub use aether_core::bundle::{ProjectBundle, ProjectMeta};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 pub use crate::frb_generated::StreamSink;
@@ -15,6 +16,37 @@ pub use crate::frb_generated::StreamSink;
 // ---------------------------------------------------------
 // FFI DATA TRANSFER OBJECTS (Media Ingestion, Waveform & Progress)
 // ---------------------------------------------------------
+
+/// Project bundle metadata exposed across the FFI boundary to Flutter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectMetadata {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<aether_core::bundle::ProjectMetadata> for ProjectMetadata {
+    fn from(m: aether_core::bundle::ProjectMetadata) -> Self {
+        Self {
+            id: m.id,
+            name: m.name,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
+    }
+}
+
+impl From<ProjectMetadata> for aether_core::bundle::ProjectMetadata {
+    fn from(m: ProjectMetadata) -> Self {
+        Self {
+            id: m.id,
+            name: m.name,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
+    }
+}
 
 /// Single audio waveform peak bin (`min`, `max`, `rms` in normalized `[-1.0, 1.0]`)
 /// exposed across the FFI boundary for zero-decode timeline waveform rendering.
@@ -100,6 +132,9 @@ static ACTIVE_PROJECT_FILE: LazyLock<RwLock<Option<String>>> =
 static ACTIVE_PROJECT_DIR: LazyLock<RwLock<Option<PathBuf>>> =
     LazyLock::new(|| RwLock::new(None));
 
+static ACTIVE_BUNDLE: LazyLock<RwLock<Option<ProjectBundle>>> =
+    LazyLock::new(|| RwLock::new(None));
+
 static IMPORT_PROGRESS_SINKS: LazyLock<Mutex<Vec<StreamSink<ImportProgress>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
@@ -113,11 +148,21 @@ fn default_standalone_cache_mgr() -> aether_media::CacheManager {
 
 fn resolve_cache_manager(project_dir: Option<&Path>) -> aether_media::CacheManager {
     if let Some(dir) = project_dir {
-        return aether_media::CacheManager::for_project(dir);
+        let bundle = ProjectBundle::new(dir);
+        let _ = bundle.ensure_directories();
+        return aether_media::CacheManager::new(bundle.cache_dir());
+    }
+    if let Ok(guard) = ACTIVE_BUNDLE.read() {
+        if let Some(ref bundle) = *guard {
+            let _ = bundle.ensure_directories();
+            return aether_media::CacheManager::new(bundle.cache_dir());
+        }
     }
     if let Ok(guard) = ACTIVE_PROJECT_DIR.read() {
         if let Some(ref active_dir) = *guard {
-            return aether_media::CacheManager::for_project(active_dir);
+            let bundle = ProjectBundle::new(active_dir);
+            let _ = bundle.ensure_directories();
+            return aether_media::CacheManager::new(bundle.cache_dir());
         }
     }
     default_standalone_cache_mgr()
@@ -196,18 +241,21 @@ fn register_media_item_in_cache(
 }
 
 fn register_project_assets(project: &Project) {
-    let proj_dir = PathBuf::from(&project.project_path);
-    if !project.project_path.is_empty() {
-        if let Ok(mut guard) = ACTIVE_PROJECT_DIR.write() {
-            *guard = Some(proj_dir.clone());
-        }
+    let bundle = project.bundle();
+    let _ = bundle.ensure_directories();
+    if let Ok(mut guard) = ACTIVE_BUNDLE.write() {
+        *guard = Some(bundle.clone());
+    }
+    let proj_dir = bundle.root_path().to_path_buf();
+    if let Ok(mut guard) = ACTIVE_PROJECT_DIR.write() {
+        *guard = Some(proj_dir.clone());
     }
     if !project.file_path.is_empty() {
         if let Ok(mut guard) = ACTIVE_PROJECT_FILE.write() {
             *guard = Some(project.file_path.clone());
         }
     }
-    let cache_mgr = aether_media::CacheManager::for_project(&proj_dir);
+    let cache_mgr = aether_media::CacheManager::new(bundle.cache_dir());
     for item in &project.media_pool.items {
         register_media_item_in_cache(item, &cache_mgr, None, None);
     }
@@ -467,6 +515,116 @@ pub fn load_project(file_path: String) -> Result<Project, String> {
 pub fn save_project(project: Project) -> Result<(), String> {
     register_project_assets(&project);
     project.save()
+}
+
+// ---------------------------------------------------------
+// PROJECT BUNDLE MANAGEMENT
+// ---------------------------------------------------------
+
+/// Creates a new document bundle at `bundle_path` (`<name>.aether`),
+/// ensures bundle and cache directories exist (`cache/{index,peaks,thumbs}`),
+/// initializes `project.db` with WAL mode and foreign keys enabled,
+/// records `project_name` in `project_meta`, sets the active bundle,
+/// and returns the [`ProjectMetadata`].
+pub fn create_project_bundle(
+    bundle_path: String,
+    project_name: String,
+) -> Result<ProjectMetadata, String> {
+    let bundle = ProjectBundle::new(&bundle_path);
+    bundle
+        .ensure_directories()
+        .map_err(|e| format!("Failed to create bundle directories: {}", e))?;
+
+    let conn = bundle
+        .open_connection()
+        .map_err(|e| format!("Failed to initialize project.db: {}", e))?;
+
+    let id = Uuid::new_v4().to_string();
+    let now: String = conn
+        .query_row("SELECT datetime('now')", [], |r| r.get(0))
+        .unwrap_or_else(|_| {
+            let duration = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            format!("{}", duration.as_secs())
+        });
+
+    let meta = ProjectMetadata {
+        id,
+        name: project_name,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    ProjectBundle::write_meta(&conn, &meta.clone().into())
+        .map_err(|e| format!("Failed to write project metadata: {}", e))?;
+
+    // Update active bundle tracking
+    if let Ok(mut guard) = ACTIVE_BUNDLE.write() {
+        *guard = Some(bundle.clone());
+    }
+    if let Ok(mut guard) = ACTIVE_PROJECT_DIR.write() {
+        *guard = Some(bundle.root_path().to_path_buf());
+    }
+    if let Ok(mut guard) = ACTIVE_PROJECT_FILE.write() {
+        *guard = Some(bundle.db_path().to_string_lossy().to_string());
+    }
+
+    Ok(meta)
+}
+
+/// Opens an existing document bundle at `bundle_path` (`<name>.aether`),
+/// validates that `project.db` exists, ensures cache directories exist
+/// (re-creating them if the user cleared the cache), opens the SQLite connection,
+/// sets the active bundle, and returns the project metadata.
+pub fn open_project_bundle(bundle_path: String) -> Result<ProjectMetadata, String> {
+    let bundle = ProjectBundle::new(&bundle_path);
+
+    if !bundle.db_path().exists() || !bundle.db_path().is_file() {
+        return Err(format!(
+            "Failed to open project bundle: '{}' does not exist or is not a valid file",
+            bundle.db_path().display()
+        ));
+    }
+
+    // Recreate cache directories if cleaned
+    bundle
+        .ensure_directories()
+        .map_err(|e| format!("Failed to ensure cache directories: {}", e))?;
+
+    let conn = bundle
+        .open_connection()
+        .map_err(|e| format!("Failed to open project.db: {}", e))?;
+
+    let meta = ProjectBundle::read_meta(&conn)
+        .map_err(|e| format!("Failed to read project metadata: {}", e))?
+        .ok_or_else(|| {
+            format!(
+                "No project metadata found in '{}'",
+                bundle.db_path().display()
+            )
+        })?;
+
+    // Update active bundle tracking
+    if let Ok(mut guard) = ACTIVE_BUNDLE.write() {
+        *guard = Some(bundle.clone());
+    }
+    if let Ok(mut guard) = ACTIVE_PROJECT_DIR.write() {
+        *guard = Some(bundle.root_path().to_path_buf());
+    }
+    if let Ok(mut guard) = ACTIVE_PROJECT_FILE.write() {
+        *guard = Some(bundle.db_path().to_string_lossy().to_string());
+    }
+
+    Ok(meta.into())
+}
+
+/// Returns the path to the currently active bundle root, if any.
+pub fn get_active_bundle_path() -> Option<String> {
+    ACTIVE_BUNDLE
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref().map(|b| b.root_path().to_string_lossy().to_string()))
 }
 
 // ---------------------------------------------------------
@@ -1003,8 +1161,16 @@ pub fn generate_audio_peaks(
         .find(|item| item.id.to_string() == media_id)
         .ok_or_else(|| format!("Media item {} not found in project", media_id))?;
         
-    let cache_dir = project.get_peaks_cache_dir()?;
-    let peak_file_path = cache_dir.join(format!("{}.aether_peaks", media_id));
+    let bundle = ACTIVE_BUNDLE
+        .read()
+        .ok()
+        .and_then(|b| b.clone())
+        .unwrap_or_else(|| project.bundle());
+    bundle
+        .ensure_directories()
+        .map_err(|e| format!("Failed to ensure bundle cache dirs: {}", e))?;
+
+    let peak_file_path = bundle.peaks_dir().join(format!("{}.aether_peaks", media_id));
     let peak_file_str = peak_file_path.to_string_lossy().to_string();
     
     aether_media::audio_peaks::generate_waveform_cache(

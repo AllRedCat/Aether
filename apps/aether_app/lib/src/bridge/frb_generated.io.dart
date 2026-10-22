@@ -192,6 +192,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Project dco_decode_project(dynamic raw);
 
   @protected
+  ProjectMetadata dco_decode_project_metadata(dynamic raw);
+
+  @protected
   Rational dco_decode_rational(dynamic raw);
 
   @protected
@@ -398,6 +401,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Project sse_decode_project(SseDeserializer deserializer);
+
+  @protected
+  ProjectMetadata sse_decode_project_metadata(SseDeserializer deserializer);
 
   @protected
   Rational sse_decode_rational(SseDeserializer deserializer);
@@ -614,6 +620,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_project(Project self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_project_metadata(
+      ProjectMetadata self, SseSerializer serializer);
 
   @protected
   void sse_encode_rational(Rational self, SseSerializer serializer);
