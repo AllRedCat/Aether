@@ -58,6 +58,11 @@ impl Project {
         Path::new(&self.project_path).join("cache")
     }
 
+    /// Returns a [`crate::bundle::ProjectBundle`] representing this project's bundle storage.
+    pub fn bundle(&self) -> crate::bundle::ProjectBundle {
+        crate::bundle::ProjectBundle::new(&self.file_path)
+    }
+
     /// Returns the absolute path to the project's media cache directory, creating it if necessary.
     /// E.g. `/project_path/.aether_cache/peaks`
     pub fn get_peaks_cache_dir(&self) -> Result<std::path::PathBuf, String> {
