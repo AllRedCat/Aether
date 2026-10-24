@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../bridge/api.dart';
+import '../inspector/selected_clip_details_provider.dart';
 import '../media_pool/media_pool_provider.dart';
 import 'preview_service.dart';
 
@@ -438,6 +439,16 @@ final previewProvider =
         notifier.loadMedia(current);
       } else {
         notifier.closeSession();
+      }
+    },
+  );
+
+  // Also react when a clip with an associated MediaItem is selected on the Timeline:
+  ref.listen<SelectedClipDetails?>(
+    selectedClipDetailsProvider,
+    (previous, current) {
+      if (current?.mediaItem != null) {
+        notifier.loadMedia(current!.mediaItem!);
       }
     },
   );

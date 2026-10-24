@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../bridge/api.dart';
 import '../../services/file_picker_service.dart';
+import '../timeline/active_timeline_provider.dart';
 import '../timeline/timeline_provider.dart';
 import '../../core/providers/project_provider.dart';
 
@@ -421,28 +422,29 @@ final mediaPoolProvider =
     initialItems: project?.mediaPool.items,
     onAddToTimeline: (mediaItem) async {
       final timelineNotifier = ref.read(timelineProvider.notifier);
-      var currentTimeline = ref.read(timelineProvider).timeline;
-      if (currentTimeline == null) {
-        await timelineNotifier.initTimeline();
-        currentTimeline = ref.read(timelineProvider).timeline;
-      }
-      if (currentTimeline == null) return;
 
       // Match media type to track kind:
       final targetKind = mediaItem.mediaType == MediaType.audio
           ? TrackKind.audio
           : TrackKind.video;
 
-      // Find first track of matching kind, fallback to first track
-      Track? targetTrack;
-      try {
-        targetTrack =
-            currentTimeline.tracks.firstWhere((t) => t.kind == targetKind);
-      } catch (_) {
-        if (currentTimeline.tracks.isNotEmpty) {
-          targetTrack = currentTimeline.tracks.first;
-        }
+      // Check if activeTimelineProvider has a track of matching type to keep IDs aligned
+      UuidValue? preferredTrackId;
+      final activeTimeline = ref.read(activeTimelineProvider).valueOrNull;
+      if (activeTimeline != null) {
+        final wantVideo = targetKind != TrackKind.audio;
+        try {
+          final dtoTrack = activeTimeline.tracks.firstWhere(
+            (t) => t.isVideo == wantVideo,
+          );
+          preferredTrackId = UuidValue.fromString(dtoTrack.id);
+        } catch (_) {}
       }
+
+      final targetTrack = await timelineNotifier.ensureTrackForKind(
+        targetKind,
+        preferredTrackId: preferredTrackId,
+      );
 
       if (targetTrack != null) {
         final duration = mediaItem.metadata.durationPts > 0

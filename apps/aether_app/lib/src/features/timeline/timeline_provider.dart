@@ -246,6 +246,87 @@ class TimelineNotifier extends StateNotifier<TimelineState> {
     }
   }
 
+  /// Ensures a track of [kind] (optionally matching [preferredTrackId]) exists in the timeline.
+  Future<Track?> ensureTrackForKind(
+    TrackKind kind, {
+    UuidValue? preferredTrackId,
+  }) async {
+    var currentTimeline = state.timeline;
+    if (currentTimeline == null) {
+      await initTimeline();
+      currentTimeline = state.timeline;
+    }
+    if (currentTimeline == null) {
+      if (state.tracks.isNotEmpty) {
+        try {
+          return state.tracks.firstWhere((t) => t.kind == kind);
+        } catch (_) {
+          return state.tracks.first;
+        }
+      }
+      return null;
+    }
+
+    if (preferredTrackId != null) {
+      for (final t in currentTimeline.tracks) {
+        if (t.id == preferredTrackId) return t;
+      }
+      // If an empty track of the same kind exists, adopt preferredTrackId so activeTimeline & timelineProvider match
+      final emptyIdx = currentTimeline.tracks.indexWhere(
+        (t) => t.kind == kind && t.clips.isEmpty,
+      );
+      if (emptyIdx >= 0) {
+        final updatedTracks = List<Track>.from(currentTimeline.tracks);
+        updatedTracks[emptyIdx] = Track(
+          id: preferredTrackId,
+          kind: kind,
+          clips: const [],
+        );
+        final updatedTl = Timeline(
+          id: currentTimeline.id,
+          timebase: currentTimeline.timebase,
+          durationPts: currentTimeline.durationPts,
+          tracks: updatedTracks,
+        );
+        state = TimelineState.fromTimeline(updatedTl);
+        return updatedTracks[emptyIdx];
+      }
+      final newTrack = Track(
+        id: preferredTrackId,
+        kind: kind,
+        clips: const [],
+      );
+      final updatedTracks = [...currentTimeline.tracks, newTrack];
+      final updatedTl = Timeline(
+        id: currentTimeline.id,
+        timebase: currentTimeline.timebase,
+        durationPts: currentTimeline.durationPts,
+        tracks: updatedTracks,
+      );
+      state = TimelineState.fromTimeline(updatedTl);
+      return newTrack;
+    }
+
+    for (final t in currentTimeline.tracks) {
+      if (t.kind == kind) return t;
+    }
+
+    final newTrack = Track(
+      id: const Uuid().v4obj(),
+      kind: kind,
+      clips: const [],
+    );
+    final updatedTracks = [...currentTimeline.tracks, newTrack];
+    final updatedTl = Timeline(
+      id: currentTimeline.id,
+      timebase: currentTimeline.timebase,
+      durationPts: currentTimeline.durationPts,
+      tracks: updatedTracks,
+    );
+    state = TimelineState.fromTimeline(updatedTl);
+    return newTrack;
+  }
+
   /// Adds a new clip to a track and recalculates duration in Rust.
   Future<void> addClip({
     UuidValue? trackId,

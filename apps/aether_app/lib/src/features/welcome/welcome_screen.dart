@@ -450,7 +450,18 @@ class WelcomeScreen extends ConsumerWidget {
           id: UuidValue.fromString(meta.id),
           timebase: const Rational(num: 60, den: 1),
           durationPts: 0,
-          tracks: const [],
+          tracks: [
+            Track(
+              id: const Uuid().v4obj(),
+              kind: TrackKind.video,
+              clips: const [],
+            ),
+            Track(
+              id: const Uuid().v4obj(),
+              kind: TrackKind.audio,
+              clips: const [],
+            ),
+          ],
         ),
         mediaPool: const MediaPool(items: []),
       );
@@ -505,21 +516,67 @@ class WelcomeScreen extends ConsumerWidget {
 
       if (!context.mounted) return;
 
-      // Atualiza estado do projeto ativo
+      // Atualiza estado do projeto ativo carregando mídias e timeline salvas no project.db
       ref.read(currentProjectMetadataProvider.notifier).state = meta;
-      ref.read(currentProjectProvider.notifier).state = Project(
-        id: meta.id,
-        name: meta.name,
-        projectPath: resolvedPath,
-        filePath: '$resolvedPath/project.db',
-        timeline: Timeline(
-          id: UuidValue.fromString(meta.id),
-          timebase: const Rational(num: 60, den: 1),
-          durationPts: 0,
-          tracks: const [],
-        ),
-        mediaPool: const MediaPool(items: []),
-      );
+      final dbPath = '$resolvedPath/project.db';
+      Project activeProject;
+      try {
+        final loaded = await loadProject(filePath: dbPath);
+        final tracks = loaded.timeline.tracks.isNotEmpty
+            ? loaded.timeline.tracks
+            : [
+                Track(
+                  id: const Uuid().v4obj(),
+                  kind: TrackKind.video,
+                  clips: const [],
+                ),
+                Track(
+                  id: const Uuid().v4obj(),
+                  kind: TrackKind.audio,
+                  clips: const [],
+                ),
+              ];
+        activeProject = Project(
+          id: loaded.id,
+          name: loaded.name,
+          projectPath: resolvedPath,
+          filePath: dbPath,
+          timeline: Timeline(
+            id: loaded.timeline.id,
+            timebase: loaded.timeline.timebase,
+            durationPts: loaded.timeline.durationPts,
+            tracks: tracks,
+          ),
+          mediaPool: loaded.mediaPool,
+        );
+      } catch (_) {
+        activeProject = Project(
+          id: meta.id,
+          name: meta.name,
+          projectPath: resolvedPath,
+          filePath: dbPath,
+          timeline: Timeline(
+            id: UuidValue.fromString(meta.id),
+            timebase: const Rational(num: 60, den: 1),
+            durationPts: 0,
+            tracks: [
+              Track(
+                id: const Uuid().v4obj(),
+                kind: TrackKind.video,
+                clips: const [],
+              ),
+              Track(
+                id: const Uuid().v4obj(),
+                kind: TrackKind.audio,
+                clips: const [],
+              ),
+            ],
+          ),
+          mediaPool: const MediaPool(items: []),
+        );
+      }
+      if (!context.mounted) return;
+      ref.read(currentProjectProvider.notifier).state = activeProject;
 
       Navigator.push(
         context,

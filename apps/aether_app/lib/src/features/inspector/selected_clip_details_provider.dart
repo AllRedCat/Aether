@@ -1,7 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 import '../../bridge/api.dart';
 import '../media_pool/media_pool_provider.dart';
+import '../timeline/active_timeline_provider.dart';
 import '../timeline/timeline_provider.dart';
 import '../timeline/timeline_selection_provider.dart';
 
@@ -88,6 +90,42 @@ final selectedClipDetailsProvider = Provider<SelectedClipDetails?>((ref) {
         }
       }
       if (targetClip != null) break;
+    }
+  }
+
+  // 2b. Fallback search in activeTimelineProvider (SQLite domain timeline)
+  if (targetClip == null || targetTrack == null) {
+    final activeTimeline = ref.watch(activeTimelineProvider).valueOrNull;
+    if (activeTimeline != null) {
+      for (final dtoClip in activeTimeline.clips) {
+        if (dtoClip.id == selectedClipId.uuid) {
+          try {
+            final dtoTrack = activeTimeline.tracks.firstWhere(
+              (t) => t.id == dtoClip.trackId,
+            );
+            final clipUuid = UuidValue.fromString(dtoClip.id);
+            final sourceUuid = UuidValue.fromString(dtoClip.assetId);
+            final trackUuid = UuidValue.fromString(dtoTrack.id);
+            final kind =
+                dtoTrack.isVideo ? TrackKind.video : TrackKind.audio;
+            targetClip = Clip(
+              id: clipUuid,
+              sourceId: sourceUuid,
+              sourceIn: dtoClip.inFrame,
+              sourceOut: dtoClip.outFrame,
+              timelineIn: dtoClip.timelineStartFrame,
+              timelineOut: dtoClip.timelineStartFrame +
+                  (dtoClip.outFrame - dtoClip.inFrame),
+            );
+            targetTrack = Track(
+              id: trackUuid,
+              kind: kind,
+              clips: [targetClip],
+            );
+          } catch (_) {}
+          break;
+        }
+      }
     }
   }
 

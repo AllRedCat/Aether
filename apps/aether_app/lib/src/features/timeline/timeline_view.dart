@@ -349,11 +349,61 @@ class TimelineView extends ConsumerWidget {
     TimelineSelectionState selectionState,
     FullTimelineStateDto activeTimeline,
   ) {
+    final timelineState = ref.watch(timelineProvider);
     final isVideo = track.isVideo;
+    final trackKind = isVideo ? TrackKind.video : TrackKind.audio;
     final trackName = track.name;
     final trackColor = isVideo ? CatppuccinMocha.blue : CatppuccinMocha.green;
-    final trackClips =
-        activeTimeline.clips.where((c) => c.trackId == track.id).toList();
+
+    UuidValue trackUuid;
+    try {
+      trackUuid = UuidValue.fromString(track.id);
+    } catch (_) {
+      trackUuid = UuidValue.fromString('00000000-0000-0000-0000-000000000000');
+    }
+
+    // Reconcile clips from SQLite activeTimeline and in-memory timelineProvider
+    final List<Clip> mergedClips = [];
+    final Set<String> seenIds = {};
+
+    for (final dtoClip in activeTimeline.clips.where((c) => c.trackId == track.id)) {
+      try {
+        final clipId = UuidValue.fromString(dtoClip.id);
+        final sourceId = UuidValue.fromString(dtoClip.assetId);
+        final clip = Clip(
+          id: clipId,
+          sourceId: sourceId,
+          sourceIn: dtoClip.inFrame,
+          sourceOut: dtoClip.outFrame,
+          timelineIn: dtoClip.timelineStartFrame,
+          timelineOut: dtoClip.timelineStartFrame + (dtoClip.outFrame - dtoClip.inFrame),
+        );
+        mergedClips.add(clip);
+        seenIds.add(clipId.uuid);
+      } catch (_) {}
+    }
+
+    final hasExactTrackMatch =
+        timelineState.tracks.any((t) => t.id.uuid == track.id);
+    for (final memTrack in timelineState.tracks) {
+      final matchesById = memTrack.id.uuid == track.id;
+      final matchesFallbackKind = !hasExactTrackMatch &&
+          track.orderIndex == 0 &&
+          memTrack.kind == trackKind;
+      if (matchesById || matchesFallbackKind) {
+        for (final memClip in memTrack.clips) {
+          if (seenIds.add(memClip.id.uuid)) {
+            mergedClips.add(memClip);
+          }
+        }
+      }
+    }
+
+    final domainTrack = Track(
+      id: trackUuid,
+      kind: trackKind,
+      clips: mergedClips,
+    );
 
     return Container(
       key: Key('timeline_track_${track.id}'),
@@ -430,7 +480,7 @@ class TimelineView extends ConsumerWidget {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        '${trackClips.length} clipe(s)',
+                        '${mergedClips.length} clipe(s)',
                         style: const TextStyle(
                           color: CatppuccinMocha.overlay0,
                           fontSize: 11,
@@ -452,7 +502,7 @@ class TimelineView extends ConsumerWidget {
                 child: Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: trackClips.isEmpty
+                  child: mergedClips.isEmpty
                       ? Container(
                           alignment: Alignment.centerLeft,
                           child: const Text(
@@ -467,78 +517,16 @@ class TimelineView extends ConsumerWidget {
                       : Wrap(
                           spacing: 4,
                           runSpacing: 4,
-                          children: trackClips.map((clip) {
-                            UuidValue? clipUuid;
-                            UuidValue? trackUuid;
-                            try {
-                              clipUuid = UuidValue.fromString(clip.id);
-                              trackUuid = UuidValue.fromString(track.id);
-                            } catch (_) {}
-
-                            final isSelected = clipUuid != null &&
-                                selectionState.isClipSelected(clipUuid);
-                            return Material(
-                              color: Colors.transparent,
-                              child: Ink(
-                                decoration: BoxDecoration(
-                                  color: isSelected
-                                      ? trackColor.withValues(alpha: 0.35)
-                                      : trackColor.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: isSelected
-                                      ? Border.all(
-                                          color: CatppuccinMocha.mauve,
-                                          width: 2.0)
-                                      : Border.all(
-                                          color:
-                                              trackColor.withValues(alpha: 0.3),
-                                          width: 1.0),
-                                ),
-                                child: InkWell(
-                                  key: Key('timeline_clip_${clip.id}'),
-                                  borderRadius: BorderRadius.circular(6),
-                                  onTap: () {
-                                    if (clipUuid != null && trackUuid != null) {
-                                      ref
-                                          .read(
-                                              timelineSelectionProvider.notifier)
-                                          .selectClip(clipUuid, trackUuid);
-                                    }
-                                  },
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 8),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          isVideo
-                                              ? Icons.movie_rounded
-                                              : Icons.graphic_eq_rounded,
-                                          size: 12,
-                                          color: isSelected
-                                              ? CatppuccinMocha.mauve
-                                              : trackColor,
-                                        ),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          'Clip [${clip.timelineStartFrame}..${clip.timelineStartFrame + (clip.outFrame - clip.inFrame)}f]',
-                                          style: TextStyle(
-                                            color: isSelected
-                                                ? CatppuccinMocha.text
-                                                : trackColor,
-                                            fontSize: 11,
-                                            fontWeight: isSelected
-                                                ? FontWeight.bold
-                                                : FontWeight.w600,
-                                            fontFamily: 'monospace',
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
+                          children: mergedClips.map((clip) {
+                            final isSelected =
+                                selectionState.isClipSelected(clip.id);
+                            return _buildClipItem(
+                              ref: ref,
+                              track: domainTrack,
+                              clip: clip,
+                              isVideo: isVideo,
+                              trackColor: trackColor,
+                              isSelected: isSelected,
                             );
                           }).toList(),
                         ),
