@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 import '../../bridge/api.dart';
+import '../../bridge/api/timeline_api.dart' show TrackDto, FullTimelineStateDto;
+import 'active_timeline_provider.dart';
+import 'create_timeline_dialog.dart';
 import 'timeline_provider.dart';
 import 'timeline_selection_provider.dart';
 import '../../theme/catppuccin.dart';
@@ -14,6 +18,8 @@ class TimelineView extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(timelineProvider);
     final selectionState = ref.watch(timelineSelectionProvider);
+    final activeTimelineAsync = ref.watch(activeTimelineProvider);
+    final activeTimeline = activeTimelineAsync.value;
 
     return Container(
       color: CatppuccinMocha.crust, // Fundo ultra escuro para a timeline
@@ -21,8 +27,9 @@ class TimelineView extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Header / Toolbar
+          // Header / Toolbar
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: const BoxDecoration(
               color: CatppuccinMocha.mantle,
               border:
@@ -40,6 +47,7 @@ class TimelineView extends ConsumerWidget {
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            // Total Clip Count Contract
                             const Text(
                               'Clipes: ',
                               style: TextStyle(
@@ -52,15 +60,17 @@ class TimelineView extends ConsumerWidget {
                               style: const TextStyle(
                                 color: CatppuccinMocha.text,
                                 fontWeight: FontWeight.bold,
-                                fontSize: 14,
+                                fontSize: 13,
                               ),
                             ),
-                            const SizedBox(width: 24),
+                            const SizedBox(width: 10),
                             Container(
                                 width: 1,
-                                height: 16,
+                                height: 14,
                                 color: CatppuccinMocha.surface1),
-                            const SizedBox(width: 24),
+                            const SizedBox(width: 10),
+
+                            // Duration PTS Contract
                             Text(
                               'Duration: ${state.durationPts} PTS',
                               key: const Key('timeline_duration_pts'),
@@ -68,44 +78,179 @@ class TimelineView extends ConsumerWidget {
                                 color: CatppuccinMocha.peach,
                                 fontWeight: FontWeight.w600,
                                 fontFamily: 'monospace',
-                                fontSize: 14,
+                                fontSize: 13,
+                              ),
+                            ),
+
+                            // Active Timeline Info Badge (SQLite Domain)
+                            if (activeTimeline != null) ...[
+                              const SizedBox(width: 10),
+                              Container(
+                                  width: 1,
+                                  height: 14,
+                                  color: CatppuccinMocha.surface1),
+                              const SizedBox(width: 10),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: CatppuccinMocha.surface0,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                      color: CatppuccinMocha.surface1),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.movie_creation_outlined,
+                                      size: 12,
+                                      color: CatppuccinMocha.mauve,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      activeTimeline.timeline.name,
+                                      key: const Key('active_timeline_name'),
+                                      style: const TextStyle(
+                                        color: CatppuccinMocha.text,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(width: 12),
+
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Add Clip Button Contract
+                            ElevatedButton.icon(
+                              key: const Key('add_clip_button'),
+                              onPressed: state.isLoading
+                                  ? null
+                                  : () => ref
+                                      .read(timelineProvider.notifier)
+                                      .addClip(),
+                              icon: state.isLoading
+                                  ? const SizedBox(
+                                      width: 12,
+                                      height: 12,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: CatppuccinMocha.base,
+                                      ),
+                                    )
+                                  : const Icon(Icons.add, size: 14),
+                              label: const Text(
+                                'Adicionar Clipe',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.w600, fontSize: 11),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: CatppuccinMocha.mauve,
+                                foregroundColor: CatppuccinMocha.base,
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+
+                            // + Track Button (PopupMenuButton for Video/Audio tracks)
+                            PopupMenuButton<bool>(
+                              key: const Key('add_track_button'),
+                              tooltip: 'Adicionar Faixa',
+                              onSelected: (isVideo) {
+                                ref
+                                    .read(activeTimelineProvider.notifier)
+                                    .addTrack(isVideo: isVideo);
+                              },
+                              itemBuilder: (context) => [
+                                const PopupMenuItem(
+                                  value: true,
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.videocam_rounded,
+                                          color: CatppuccinMocha.blue,
+                                          size: 18),
+                                      SizedBox(width: 8),
+                                      Text('Faixa de Vídeo'),
+                                    ],
+                                  ),
+                                ),
+                                const PopupMenuItem(
+                                  value: false,
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.audiotrack_rounded,
+                                          color: CatppuccinMocha.green,
+                                          size: 18),
+                                      SizedBox(width: 8),
+                                      Text('Faixa de Áudio'),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: CatppuccinMocha.surface0,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                      color: CatppuccinMocha.surface1),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.add,
+                                        size: 13,
+                                        color: CatppuccinMocha.text),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      '+ Track',
+                                      style: TextStyle(
+                                        color: CatppuccinMocha.text,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+
+                            // + Timeline Button
+                            OutlinedButton.icon(
+                              key: const Key('create_timeline_button'),
+                              onPressed: () =>
+                                  CreateTimelineDialog.show(context),
+                              icon: const Icon(Icons.add_box_outlined,
+                                  size: 13),
+                              label: const Text('+ Timeline',
+                                  style: TextStyle(fontSize: 11)),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: CatppuccinMocha.text,
+                                side: const BorderSide(
+                                    color: CatppuccinMocha.surface1),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 6),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(6)),
                               ),
                             ),
                           ],
-                        ),
-                        const SizedBox(width: 16),
-                        ElevatedButton.icon(
-                          key: const Key('add_clip_button'),
-                          onPressed: state.isLoading
-                              ? null
-                              : () =>
-                                  ref.read(timelineProvider.notifier).addClip(),
-                          icon: state.isLoading
-                              ? const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: CatppuccinMocha.base,
-                                  ),
-                                )
-                              : const Icon(Icons.add, size: 16),
-                          label: const Text(
-                            'Adicionar Clipe',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: CatppuccinMocha.mauve,
-                            foregroundColor: CatppuccinMocha.base,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
-                          ),
                         ),
                       ],
                     ),
@@ -146,34 +291,262 @@ class TimelineView extends ConsumerWidget {
               onTap: () {
                 ref.read(timelineSelectionProvider.notifier).clearSelection();
               },
-              child: state.isLoading && state.timeline == null
-                  ? const Center(
-                      child: CircularProgressIndicator(
-                          color: CatppuccinMocha.mauve))
-                  : state.tracks.isEmpty
+              child: activeTimeline != null && activeTimeline.tracks.isNotEmpty
+                  ? ListView.builder(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: activeTimeline.tracks.length,
+                      itemBuilder: (context, trackIndex) {
+                        final track = activeTimeline.tracks[trackIndex];
+                        return _buildActiveTrackLane(
+                          context,
+                          ref,
+                          track,
+                          trackIndex,
+                          selectionState,
+                          activeTimeline,
+                        );
+                      },
+                    )
+                  : state.isLoading && state.timeline == null
                       ? const Center(
-                          child: Text(
-                            'No tracks available',
-                            style: TextStyle(color: CatppuccinMocha.subtext0),
-                          ),
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.all(12),
-                          itemCount: state.tracks.length,
-                          itemBuilder: (context, trackIndex) {
-                            final track = state.tracks[trackIndex];
-                            return _buildTrackLane(
-                              context,
-                              ref,
-                              track,
-                              trackIndex,
-                              selectionState,
-                            );
-                          },
-                        ),
+                          child: CircularProgressIndicator(
+                              color: CatppuccinMocha.mauve))
+                      : state.tracks.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'No tracks available',
+                                style:
+                                    TextStyle(color: CatppuccinMocha.subtext0),
+                              ),
+                            )
+                          : ListView.builder(
+                              padding: const EdgeInsets.all(12),
+                              itemCount: state.tracks.length,
+                              itemBuilder: (context, trackIndex) {
+                                final track = state.tracks[trackIndex];
+                                return _buildTrackLane(
+                                  context,
+                                  ref,
+                                  track,
+                                  trackIndex,
+                                  selectionState,
+                                );
+                              },
+                            ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+
+  Widget _buildActiveTrackLane(
+    BuildContext context,
+    WidgetRef ref,
+    TrackDto track,
+    int index,
+    TimelineSelectionState selectionState,
+    FullTimelineStateDto activeTimeline,
+  ) {
+    final isVideo = track.isVideo;
+    final trackName = track.name;
+    final trackColor = isVideo ? CatppuccinMocha.blue : CatppuccinMocha.green;
+    final trackClips =
+        activeTimeline.clips.where((c) => c.trackId == track.id).toList();
+
+    return Container(
+      key: Key('timeline_track_${track.id}'),
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: CatppuccinMocha.base,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: CatppuccinMocha.surface0),
+      ),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Track Header
+            Container(
+              width: 160,
+              padding: const EdgeInsets.all(12),
+              decoration: const BoxDecoration(
+                color: CatppuccinMocha.mantle,
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(8),
+                  bottomLeft: Radius.circular(8),
+                ),
+                border: Border(
+                  right: BorderSide(color: CatppuccinMocha.surface0),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        isVideo
+                            ? Icons.videocam_rounded
+                            : Icons.audiotrack_rounded,
+                        size: 16,
+                        color: trackColor,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          trackName,
+                          key: Key('track_name_${track.id}'),
+                          style: const TextStyle(
+                            color: CatppuccinMocha.text,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: trackColor.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          isVideo ? 'VÍDEO' : 'ÁUDIO',
+                          style: TextStyle(
+                            color: trackColor,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '${trackClips.length} clipe(s)',
+                        style: const TextStyle(
+                          color: CatppuccinMocha.overlay0,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            // Track Body (Clips Area)
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () {
+                  ref.read(timelineSelectionProvider.notifier).clearSelection();
+                },
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: trackClips.isEmpty
+                      ? Container(
+                          alignment: Alignment.centerLeft,
+                          child: const Text(
+                            'Faixa vazia. Adicione clipes.',
+                            style: TextStyle(
+                              color: CatppuccinMocha.surface2,
+                              fontSize: 12,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        )
+                      : Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          children: trackClips.map((clip) {
+                            UuidValue? clipUuid;
+                            UuidValue? trackUuid;
+                            try {
+                              clipUuid = UuidValue.fromString(clip.id);
+                              trackUuid = UuidValue.fromString(track.id);
+                            } catch (_) {}
+
+                            final isSelected = clipUuid != null &&
+                                selectionState.isClipSelected(clipUuid);
+                            return Material(
+                              color: Colors.transparent,
+                              child: Ink(
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? trackColor.withValues(alpha: 0.35)
+                                      : trackColor.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: isSelected
+                                      ? Border.all(
+                                          color: CatppuccinMocha.mauve,
+                                          width: 2.0)
+                                      : Border.all(
+                                          color:
+                                              trackColor.withValues(alpha: 0.3),
+                                          width: 1.0),
+                                ),
+                                child: InkWell(
+                                  key: Key('timeline_clip_${clip.id}'),
+                                  borderRadius: BorderRadius.circular(6),
+                                  onTap: () {
+                                    if (clipUuid != null && trackUuid != null) {
+                                      ref
+                                          .read(
+                                              timelineSelectionProvider.notifier)
+                                          .selectClip(clipUuid, trackUuid);
+                                    }
+                                  },
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 8),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          isVideo
+                                              ? Icons.movie_rounded
+                                              : Icons.graphic_eq_rounded,
+                                          size: 12,
+                                          color: isSelected
+                                              ? CatppuccinMocha.mauve
+                                              : trackColor,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          'Clip [${clip.timelineStartFrame}..${clip.timelineStartFrame + (clip.outFrame - clip.inFrame)}f]',
+                                          style: TextStyle(
+                                            color: isSelected
+                                                ? CatppuccinMocha.text
+                                                : trackColor,
+                                            fontSize: 11,
+                                            fontWeight: isSelected
+                                                ? FontWeight.bold
+                                                : FontWeight.w600,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
