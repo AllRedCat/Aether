@@ -629,6 +629,11 @@ pub fn open_project_bundle(bundle_path: String) -> Result<ProjectMetadata, Strin
         *guard = Some(bundle.db_path().to_string_lossy().to_string());
     }
 
+    // Register any existing media pool assets from project.db into ASSET_REGISTRY
+    if let Ok(project) = Project::load(&bundle.db_path().to_string_lossy()) {
+        register_project_assets(&project);
+    }
+
     Ok(meta.into())
 }
 
@@ -712,7 +717,9 @@ fn ingest_and_schedule_caches(
             .map_err(|e| format!("Failed to load project at '{}': {}", proj_path, e))?;
         register_project_assets(&project);
 
-        let cache_mgr = aether_media::CacheManager::for_project(&project.project_path);
+        let bundle = project.bundle();
+        let _ = bundle.ensure_directories();
+        let cache_mgr = aether_media::CacheManager::new(bundle.cache_dir());
         let timebase = project.timeline.timebase;
 
         let ingested = aether_media::ingest_media_with_cache(path, timebase, Some(&cache_mgr))

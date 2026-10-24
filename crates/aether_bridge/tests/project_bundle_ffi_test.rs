@@ -118,3 +118,62 @@ fn test_create_project_bundle_normalizes_extension() {
     assert!(expected_bundle.is_dir());
     assert!(expected_bundle.join("project.db").is_file());
 }
+
+#[test]
+fn test_import_media_file_into_project_bundle_with_active_timeline() {
+    use aether_bridge::api::{create_new_timeline, get_media_items, import_media_file};
+    use std::io::Write;
+
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let tmp = TestDir::new("bundle_media_import");
+    let bundle_path = tmp.path.join("testando.aether");
+    let bundle_path_str = bundle_path.to_str().unwrap().to_string();
+    let db_path_str = bundle_path.join("project.db").to_str().unwrap().to_string();
+
+    // 1. Create bundle (WelcomeScreen flow)
+    let _meta = create_project_bundle(bundle_path_str.clone(), "testando".to_string())
+        .expect("create_project_bundle failed");
+
+    // 2. Initialize default timeline in SQLite (EditorScreen / activeTimelineProvider flow)
+    let _tl_state = create_new_timeline("Timeline 1".to_string(), 1920, 1080, 60, 1)
+        .expect("create_new_timeline failed");
+
+    // 3. Create a valid test WAV file and import it via import_media_file passing project.db path
+    let wav_path = tmp.path.join("gravacao_show.wav");
+    {
+        let sample_rate: u32 = 48_000;
+        let num_samples: usize = 2048;
+        let data_size = (num_samples * 2) as u32;
+        let riff_size = 36 + data_size;
+        let mut f = fs::File::create(&wav_path).unwrap();
+        f.write_all(b"RIFF").unwrap();
+        f.write_all(&riff_size.to_le_bytes()).unwrap();
+        f.write_all(b"WAVEfmt ").unwrap();
+        f.write_all(&16u32.to_le_bytes()).unwrap();
+        f.write_all(&1u16.to_le_bytes()).unwrap();
+        f.write_all(&1u16.to_le_bytes()).unwrap();
+        f.write_all(&sample_rate.to_le_bytes()).unwrap();
+        f.write_all(&(sample_rate * 2).to_le_bytes()).unwrap();
+        f.write_all(&2u16.to_le_bytes()).unwrap();
+        f.write_all(&16u16.to_le_bytes()).unwrap();
+        f.write_all(b"data").unwrap();
+        f.write_all(&data_size.to_le_bytes()).unwrap();
+        for _ in 0..num_samples {
+            f.write_all(&1000i16.to_le_bytes()).unwrap();
+        }
+    }
+
+    let imported = import_media_file(
+        Some(db_path_str.clone()),
+        wav_path.to_str().unwrap().to_string(),
+    )
+    .expect("import_media_file into bundle project.db should succeed");
+
+    assert_eq!(imported.file_name, "gravacao_show.wav");
+
+    // 4. Verify media item is persisted and retrievable via get_media_items
+    let items = get_media_items(db_path_str).expect("get_media_items should succeed");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, imported.id);
+    assert_eq!(items[0].file_name, "gravacao_show.wav");
+}
