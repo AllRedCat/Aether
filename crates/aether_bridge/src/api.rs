@@ -5,6 +5,9 @@ use std::thread;
 use std::time::Duration;
 
 use flutter_rust_bridge::frb;
+pub mod timeline_api;
+pub use timeline_api::*;
+
 pub use aether_core::timeline::{Clip, Rational, Timeline, Track, TrackKind};
 pub use aether_core::project::Project;
 pub use aether_core::media::{MediaItem, MediaMetadata, MediaPool, MediaTechInfo, MediaType};
@@ -134,6 +137,16 @@ static ACTIVE_PROJECT_DIR: LazyLock<RwLock<Option<PathBuf>>> =
 
 static ACTIVE_BUNDLE: LazyLock<RwLock<Option<ProjectBundle>>> =
     LazyLock::new(|| RwLock::new(None));
+
+pub fn get_active_project_file() -> Option<String> {
+    ACTIVE_PROJECT_FILE.read().ok().and_then(|g| g.clone())
+}
+
+pub fn set_active_project_file(path: Option<String>) {
+    if let Ok(mut guard) = ACTIVE_PROJECT_FILE.write() {
+        *guard = path;
+    }
+}
 
 static IMPORT_PROGRESS_SINKS: LazyLock<Mutex<Vec<StreamSink<ImportProgress>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
