@@ -1,16 +1,26 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
+
 import 'package:file_selector/file_selector.dart';
-import '../../theme/catppuccin.dart';
-import '../../bridge/api.dart';
-import '../editor/editor_screen.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../bridge/api.dart';
+import '../../core/models/recent_project.dart';
 import '../../core/providers/project_provider.dart';
+import '../../core/providers/recent_projects_provider.dart';
+import '../../core/utils/date_formatter.dart';
+import '../../theme/catppuccin.dart';
+import '../editor/editor_screen.dart';
 
 class WelcomeScreen extends ConsumerWidget {
   const WelcomeScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final recentProjectsAsync = ref.watch(filteredRecentProjectsProvider);
+
     return Scaffold(
       backgroundColor: CatppuccinMocha.base,
       body: Row(
@@ -23,7 +33,8 @@ class WelcomeScreen extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Padding(
-                  padding: EdgeInsets.only(top: 40.0, left: 24.0, bottom: 20.0),
+                  padding:
+                      EdgeInsets.only(top: 40.0, left: 24.0, bottom: 20.0),
                   child: Text(
                     "Projetos",
                     style: TextStyle(
@@ -36,6 +47,10 @@ class WelcomeScreen extends ConsumerWidget {
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16.0),
                   child: TextField(
+                    onChanged: (value) {
+                      ref.read(projectSearchQueryProvider.notifier).state =
+                          value;
+                    },
                     decoration: InputDecoration(
                       hintText: "Buscar projetos...",
                       hintStyle:
@@ -55,32 +70,61 @@ class WelcomeScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: 16),
                 Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                    children: [
-                      _buildRecentProjectItem(
-                        context,
-                        ref,
-                        "Edição Casamento.aether",
-                        "/Users/gabriel/Videos/Casamento",
-                        "Ontem",
-                        isActive: true,
+                  child: recentProjectsAsync.when(
+                    data: (projects) {
+                      if (projects.isEmpty) {
+                        final query = ref.watch(projectSearchQueryProvider);
+                        return Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16.0),
+                            child: Text(
+                              query.isEmpty
+                                  ? "Nenhum projeto recente"
+                                  : "Nenhum projeto encontrado para \"$query\"",
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: CatppuccinMocha.subtext0,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      return ListView.builder(
+                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                        itemCount: projects.length,
+                        itemBuilder: (context, index) {
+                          final project = projects[index];
+                          return _buildRecentProjectItem(
+                            context,
+                            ref,
+                            project,
+                          );
+                        },
+                      );
+                    },
+                    loading: () => const Center(
+                      child: SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: CatppuccinMocha.mauve,
+                        ),
                       ),
-                      _buildRecentProjectItem(
-                        context,
-                        ref,
-                        "Vlog Viagem Japão.aether",
-                        "/Users/gabriel/Videos/Vlogs",
-                        "Semana Passada",
+                    ),
+                    error: (err, _) => Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Text(
+                          "Erro ao carregar projetos: $err",
+                          style: const TextStyle(
+                              color: CatppuccinMocha.red, fontSize: 12),
+                          textAlign: TextAlign.center,
+                        ),
                       ),
-                      _buildRecentProjectItem(
-                        context,
-                        ref,
-                        "Clipe Banda.aether",
-                        "/Users/gabriel/Videos/Banda",
-                        "Há 2 semanas",
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ],
@@ -98,7 +142,7 @@ class WelcomeScreen extends ConsumerWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // Logo Falsa / Título
+                    // Logo / Título
                     Container(
                       width: 100,
                       height: 100,
@@ -144,7 +188,7 @@ class WelcomeScreen extends ConsumerWidget {
                     _buildActionButton(
                       icon: Icons.add_box_rounded,
                       title: "Novo Projeto",
-                      subtitle: "Criar uma nova timeline de edição em branco",
+                      subtitle: "Criar um novo pacote de projeto (.aether)",
                       color: CatppuccinMocha.mauve,
                       onTap: () => _handleNewProject(context, ref),
                     ),
@@ -153,7 +197,7 @@ class WelcomeScreen extends ConsumerWidget {
                       icon: Icons.folder_open_rounded,
                       title: "Abrir Projeto",
                       subtitle:
-                          "Abrir um arquivo .aether existente no computador",
+                          "Abrir um pacote .aether existente no computador",
                       color: CatppuccinMocha.blue,
                       onTap: () => _handleOpenProject(context, ref),
                     ),
@@ -167,18 +211,23 @@ class WelcomeScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildRecentProjectItem(BuildContext context, WidgetRef ref,
-      String title, String path, String date,
-      {bool isActive = false}) {
+  Widget _buildRecentProjectItem(
+    BuildContext context,
+    WidgetRef ref,
+    RecentProject project,
+  ) {
+    final relativeDate = formatRelativeDatePtBr(project.lastOpenedAt);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
       decoration: BoxDecoration(
-        color: isActive ? CatppuccinMocha.surface0 : Colors.transparent,
+        color: Colors.transparent,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Material(
         color: Colors.transparent,
         child: ListTile(
+          dense: true,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           hoverColor: CatppuccinMocha.surface0.withValues(alpha: 0.5),
           leading: Container(
@@ -191,7 +240,7 @@ class WelcomeScreen extends ConsumerWidget {
                 color: CatppuccinMocha.mauve, size: 20),
           ),
           title: Text(
-            title,
+            project.name,
             style: const TextStyle(
               color: CatppuccinMocha.text,
               fontWeight: FontWeight.w500,
@@ -199,21 +248,35 @@ class WelcomeScreen extends ConsumerWidget {
             ),
           ),
           subtitle: Text(
-            path,
+            project.bundlePath,
             style:
                 const TextStyle(color: CatppuccinMocha.subtext0, fontSize: 11),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          trailing: Text(
-            date,
-            style:
-                const TextStyle(color: CatppuccinMocha.overlay0, fontSize: 11),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                relativeDate,
+                style: const TextStyle(
+                    color: CatppuccinMocha.overlay0, fontSize: 11),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.close, size: 14),
+                color: CatppuccinMocha.overlay0,
+                tooltip: 'Remover da lista',
+                splashRadius: 14,
+                onPressed: () {
+                  ref
+                      .read(recentProjectsProvider.notifier)
+                      .removeProject(project.bundlePath);
+                },
+              ),
+            ],
           ),
-          onTap: () {
-            // Itens recentes ainda são mockups: tenta abrir '<path>/<title>'.
-            _openProjectFile(context, ref, '$path/$title');
-          },
+          onTap: () => _openProjectBundle(context, ref, project.bundlePath),
         ),
       ),
     );
@@ -332,74 +395,160 @@ class WelcomeScreen extends ConsumerWidget {
       },
     );
 
-    if (projectName == null || !context.mounted) return;
+    if (projectName == null || projectName.trim().isEmpty || !context.mounted) {
+      return;
+    }
 
-    // 2. Abre o seletor de pasta NATIVO do sistema operacional
-    final String? selectedDirectory = await getDirectoryPath(
-      confirmButtonText: 'Criar Projeto Aqui',
-    );
+    final trimmedName = projectName.trim();
+    String bundlePath;
 
-    if (selectedDirectory == null || !context.mounted) return; // Cancelou
+    if (Platform.isAndroid) {
+      // No Android, salva dentro do diretório de documentos do app em /Projects/
+      final docDir = await getApplicationDocumentsDirectory();
+      final projectsDir = Directory('${docDir.path}/Projects');
+      if (!await projectsDir.exists()) {
+        await projectsDir.create(recursive: true);
+      }
+      final safeName = trimmedName.replaceAll(RegExp(r'[^\w\s\.-]'), '_');
+      bundlePath = '${projectsDir.path}/$safeName.aether';
+    } else {
+      // No Desktop (macOS, Windows, Linux), abre seletor de diretório nativo
+      final String? selectedDirectory = await getDirectoryPath(
+        confirmButtonText: 'Criar Projeto Aqui',
+      );
+      if (selectedDirectory == null || !context.mounted) return;
+
+      final safeName = trimmedName.replaceAll(RegExp(r'[^\w\s\.-]'), '_');
+      bundlePath = '$selectedDirectory/$safeName.aether';
+    }
 
     try {
-      // 3. Chama o motor Rust para criar o projeto no destino escolhido
-      final project = await createProject(
-        name: projectName,
-        baseDir: selectedDirectory,
+      // 3. Chama o motor Rust para criar o ProjectBundle
+      final meta = await createProjectBundle(
+        bundlePath: bundlePath,
+        projectName: trimmedName,
       );
 
-      if (context.mounted) {
-        // Torna o projeto recém-criado o projeto ativo (sem isso nada é salvo no .aether).
-        ref.read(currentProjectProvider.notifier).state = project;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: CatppuccinMocha.green,
-            content: Text(
-              'Projeto "$projectName" criado em: ${project.projectPath}',
-              style: const TextStyle(color: CatppuccinMocha.crust),
-            ),
+      if (!context.mounted) return;
+
+      // 4. Registra na lista de projetos recentes
+      await ref.read(recentProjectsProvider.notifier).addOrUpdateProject(
+            meta.name,
+            bundlePath,
+          );
+
+      if (!context.mounted) return;
+
+      // 5. Configura o estado do projeto ativo
+      ref.read(currentProjectMetadataProvider.notifier).state = meta;
+      ref.read(currentProjectProvider.notifier).state = Project(
+        id: meta.id,
+        name: meta.name,
+        projectPath: bundlePath,
+        filePath: '$bundlePath/project.db',
+        timeline: Timeline(
+          id: UuidValue.fromString(meta.id),
+          timebase: const Rational(num: 60, den: 1),
+          durationPts: 0,
+          tracks: const [],
+        ),
+        mediaPool: const MediaPool(items: []),
+      );
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: CatppuccinMocha.green,
+          content: Text(
+            'Projeto "$trimmedName" criado com sucesso!',
+            style: const TextStyle(color: CatppuccinMocha.crust),
           ),
-        );
-        // 4. Vai para a Workspace de edição
-        Navigator.push(
-            context, MaterialPageRoute(builder: (_) => const EditorScreen()));
-      }
+        ),
+      );
+
+      // 6. Navega para a Workspace de edição
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const EditorScreen()),
+      );
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              backgroundColor: CatppuccinMocha.red,
-              content: Text('Erro ao criar projeto: $e')),
+            backgroundColor: CatppuccinMocha.red,
+            content: Text('Erro ao criar projeto: $e'),
+          ),
         );
       }
     }
   }
 
-  /// Loads a project from disk and makes it the active project.
-  Future<void> _openProjectFile(
-      BuildContext context, WidgetRef ref, String filePath) async {
+  /// Opens a project bundle from disk, updates active state, and navigates to the editor.
+  Future<void> _openProjectBundle(
+    BuildContext context,
+    WidgetRef ref,
+    String bundlePath,
+  ) async {
     try {
-      final project = await loadProject(filePath: filePath);
+      var resolvedPath = bundlePath;
+      if (resolvedPath.endsWith('project.db')) {
+        resolvedPath = File(resolvedPath).parent.path;
+      }
+
+      final meta = await openProjectBundle(bundlePath: resolvedPath);
       if (!context.mounted) return;
-      ref.read(currentProjectProvider.notifier).state = project;
+
+      // Registra na lista de projetos recentes
+      await ref.read(recentProjectsProvider.notifier).addOrUpdateProject(
+            meta.name,
+            resolvedPath,
+          );
+
+      if (!context.mounted) return;
+
+      // Atualiza estado do projeto ativo
+      ref.read(currentProjectMetadataProvider.notifier).state = meta;
+      ref.read(currentProjectProvider.notifier).state = Project(
+        id: meta.id,
+        name: meta.name,
+        projectPath: resolvedPath,
+        filePath: '$resolvedPath/project.db',
+        timeline: Timeline(
+          id: UuidValue.fromString(meta.id),
+          timebase: const Rational(num: 60, den: 1),
+          durationPts: 0,
+          tracks: const [],
+        ),
+        mediaPool: const MediaPool(items: []),
+      );
+
       Navigator.push(
-          context, MaterialPageRoute(builder: (_) => const EditorScreen()));
+        context,
+        MaterialPageRoute(builder: (_) => const EditorScreen()),
+      );
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              backgroundColor: CatppuccinMocha.red,
-              content: Text('Erro ao abrir projeto: $e')),
+            backgroundColor: CatppuccinMocha.red,
+            content: Text('Erro ao abrir projeto: $e'),
+          ),
         );
       }
     }
   }
 
   Future<void> _handleOpenProject(BuildContext context, WidgetRef ref) async {
-    const typeGroup =
-        XTypeGroup(label: 'Aether Project', extensions: ['aether']);
+    const typeGroup = XTypeGroup(
+      label: 'Aether Project',
+      extensions: ['aether', 'db'],
+    );
     final file = await openFile(acceptedTypeGroups: const [typeGroup]);
     if (file == null || !context.mounted) return;
-    await _openProjectFile(context, ref, file.path);
+
+    var bundlePath = file.path;
+    if (bundlePath.endsWith('project.db')) {
+      bundlePath = File(bundlePath).parent.path;
+    }
+    await _openProjectBundle(context, ref, bundlePath);
   }
 }
