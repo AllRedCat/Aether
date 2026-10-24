@@ -101,6 +101,67 @@ CREATE TABLE IF NOT EXISTS clips (
 CREATE INDEX IF NOT EXISTS idx_clips_source ON clips(source_id);
 "#;
 
+const MEDIA_ASSETS_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS media_assets (
+    row                 INTEGER PRIMARY KEY,
+    id                  TEXT NOT NULL,
+    file_path           TEXT NOT NULL,
+    file_name           TEXT NOT NULL,
+    media_type          TEXT NOT NULL CHECK (media_type IN ('Video','Audio','Image')),
+    file_size_bytes     INTEGER NOT NULL DEFAULT 0,
+    width               INTEGER,
+    height              INTEGER,
+    duration_pts        INTEGER NOT NULL DEFAULT 0,
+    duration_seconds    REAL    NOT NULL DEFAULT 0,
+    timebase_num        INTEGER,
+    timebase_den        INTEGER,
+    audio_channels      INTEGER,
+    sample_rate         INTEGER,
+    video_codec         TEXT,
+    audio_codec         TEXT,
+    pixel_format        TEXT,
+    is_vfr              INTEGER,
+    -- deep inspection (MediaTechInfo); has_tech = 0 means `tech: None`
+    has_tech            INTEGER NOT NULL DEFAULT 0,
+    content_hash        TEXT,
+    container           TEXT,
+    coded_width         INTEGER,
+    coded_height        INTEGER,
+    display_width       INTEGER,
+    display_height      INTEGER,
+    bit_depth           INTEGER,
+    track_timebase_num  INTEGER,
+    track_timebase_den  INTEGER,
+    channel_layout      TEXT,
+    video_packet_count  INTEGER,
+    keyframe_count      INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_media_assets_id   ON media_assets(id);
+CREATE INDEX IF NOT EXISTS idx_media_assets_hash ON media_assets(content_hash);
+"#;
+
+/// Resolves a path that may point either to a `.aether` bundle directory or directly to a database file.
+fn resolve_db_file_path(file_path: &str) -> String {
+    let p = Path::new(file_path);
+    if p.is_dir() {
+        return p.join("project.db").to_string_lossy().to_string();
+    }
+    file_path.to_string()
+}
+
+/// Checks whether a given table in SQLite contains a specific column.
+fn table_has_column(conn: &Connection, table: &str, col_name: &str) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({})", table))
+        .map_err(sql_err)?;
+    let cols = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(sql_err)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(sql_err)?;
+    Ok(cols.iter().any(|c| c.eq_ignore_ascii_case(col_name)))
+}
+
 /// On-disk format detected from the file header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectFileFormat {
@@ -111,7 +172,8 @@ pub enum ProjectFileFormat {
 
 /// Sniffs the first bytes of a project file.
 pub fn detect_format(file_path: &str) -> Result<ProjectFileFormat, String> {
-    let mut f = fs::File::open(file_path)
+    let resolved = resolve_db_file_path(file_path);
+    let mut f = fs::File::open(&resolved)
         .map_err(|e| format!("Falha ao ler o arquivo .aether: {}", e))?;
     let mut head = [0u8; 16];
     let mut read = 0;
@@ -134,11 +196,12 @@ pub fn detect_format(file_path: &str) -> Result<ProjectFileFormat, String> {
 }
 
 fn open_connection(file_path: &str, create: bool) -> Result<Connection, String> {
+    let resolved = resolve_db_file_path(file_path);
     let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     if create {
         flags |= OpenFlags::SQLITE_OPEN_CREATE;
     }
-    let conn = Connection::open_with_flags(file_path, flags)
+    let conn = Connection::open_with_flags(&resolved, flags)
         .map_err(|e| format!("Falha ao abrir banco do projeto: {}", e))?;
     conn.busy_timeout(BUSY_TIMEOUT)
         .map_err(|e| format!("Falha ao configurar banco do projeto: {}", e))?;
@@ -157,6 +220,20 @@ fn ensure_schema(conn: &Connection) -> Result<(), String> {
             version, SCHEMA_VERSION
         ));
     }
+
+    // Check if this database was initialized by ProjectBundle (columnar project_meta)
+    // or db::timeline (timelines with fps_num).
+    let is_bundle_meta = table_has_column(conn, "project_meta", "created_at")?;
+    let is_domain_timeline = table_has_column(conn, "timelines", "fps_num")?;
+
+    if is_bundle_meta || is_domain_timeline {
+        conn.execute_batch(MEDIA_ASSETS_SCHEMA).map_err(sql_err)?;
+        if !table_has_column(conn, "timelines", "timebase_num")? {
+            crate::db::timeline::init_timeline_schema(conn).map_err(sql_err)?;
+        }
+        return Ok(());
+    }
+
     if version < SCHEMA_VERSION {
         conn.execute_batch(SCHEMA_V1).map_err(sql_err)?;
         conn.execute_batch(&format!(
@@ -164,6 +241,8 @@ fn ensure_schema(conn: &Connection) -> Result<(), String> {
             AETHER_APPLICATION_ID, SCHEMA_VERSION
         ))
         .map_err(sql_err)?;
+    } else {
+        conn.execute_batch(MEDIA_ASSETS_SCHEMA).map_err(sql_err)?;
     }
     Ok(())
 }
@@ -182,7 +261,8 @@ fn sql_err(e: rusqlite::Error) -> String {
 /// present in `project.media_pool` are removed). If the target file is a legacy
 /// JSON project it is first moved aside to `<file>.json.bak`.
 pub fn save_project(project: &Project) -> Result<(), String> {
-    let path = project.file_path.as_str();
+    let resolved_path = resolve_db_file_path(project.file_path.as_str());
+    let path = resolved_path.as_str();
     if Path::new(path).exists() {
         match detect_format(path)? {
             ProjectFileFormat::Sqlite => {}
@@ -226,22 +306,23 @@ pub fn save_project(project: &Project) -> Result<(), String> {
 
 /// Loads a project. Legacy JSON files are migrated to SQLite in place.
 pub fn load_project(file_path: &str) -> Result<Project, String> {
-    match detect_format(file_path)? {
-        ProjectFileFormat::Sqlite => load_sqlite(file_path),
+    let resolved = resolve_db_file_path(file_path);
+    match detect_format(&resolved)? {
+        ProjectFileFormat::Sqlite => load_sqlite(&resolved),
         ProjectFileFormat::LegacyJson => {
-            let json = fs::read_to_string(file_path)
+            let json = fs::read_to_string(&resolved)
                 .map_err(|e| format!("Falha ao ler o arquivo .aether: {}", e))?;
             let json = json.trim_start_matches('\u{feff}');
             let mut project: Project = serde_json::from_str(json)
                 .map_err(|e| format!("Falha ao decodificar projeto corrompido: {}", e))?;
-            relocate(&mut project, file_path);
+            relocate(&mut project, &resolved);
             // The per-frame keyframe list is no longer persisted.
             for item in &mut project.media_pool.items {
                 item.metadata.keyframe_pts = None;
             }
             // Best-effort migration: a read-only location must not block opening.
             if let Err(e) = save_project(&project) {
-                eprintln!("[aether_core] migração JSON→SQLite falhou para '{}': {}", file_path, e);
+                eprintln!("[aether_core] migração JSON→SQLite falhou para '{}': {}", resolved, e);
             }
             Ok(project)
         }
@@ -366,22 +447,137 @@ fn backup_legacy_json(path: &str) -> Result<(), String> {
 }
 
 fn write_meta(tx: &Transaction, p: &Project) -> Result<(), String> {
-    let mut stmt = tx
-        .prepare("INSERT OR REPLACE INTO project_meta(key, value) VALUES (?1, ?2)")
+    if table_has_column(tx, "project_meta", "key")? {
+        let mut stmt = tx
+            .prepare("INSERT OR REPLACE INTO project_meta(key, value) VALUES (?1, ?2)")
+            .map_err(sql_err)?;
+        for (k, v) in [
+            ("id", p.id.as_str()),
+            ("name", p.name.as_str()),
+            ("project_path", p.project_path.as_str()),
+            ("file_path", p.file_path.as_str()),
+            ("timeline_id", &p.timeline.id.to_string()),
+        ] {
+            stmt.execute(params![k, v]).map_err(sql_err)?;
+        }
+    } else {
+        // ProjectBundle columnar format: (id, name, created_at, updated_at)
+        let existing_created_at: Option<String> = tx
+            .query_row(
+                "SELECT created_at FROM project_meta WHERE id = ?1 LIMIT 1",
+                [&p.id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(sql_err)?;
+        let now: String = tx
+            .query_row("SELECT datetime('now')", [], |r| r.get(0))
+            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+        let created_at = existing_created_at.unwrap_or_else(|| now.clone());
+        tx.execute(
+            "INSERT OR REPLACE INTO project_meta (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![p.id, p.name, created_at, now],
+        )
         .map_err(sql_err)?;
-    for (k, v) in [
-        ("id", p.id.as_str()),
-        ("name", p.name.as_str()),
-        ("project_path", p.project_path.as_str()),
-        ("file_path", p.file_path.as_str()),
-        ("timeline_id", &p.timeline.id.to_string()),
-    ] {
-        stmt.execute(params![k, v]).map_err(sql_err)?;
     }
     Ok(())
 }
 
 fn write_timeline(tx: &Transaction, tl: &Timeline) -> Result<(), String> {
+    if table_has_column(tx, "timelines", "fps_num")? {
+        // Domain timeline schema (db::timeline): timelines(id, name, fps_num, fps_den, width, height, duration_frames, created_at, updated_at)
+        let tl_id_str = tl.id.to_string();
+        let existing: Option<(String, u32, u32, String)> = tx
+            .query_row(
+                "SELECT name, width, height, created_at FROM timelines WHERE id = ?1 LIMIT 1",
+                [&tl_id_str],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()
+            .map_err(sql_err)?;
+
+        let total_timelines: i64 = tx
+            .query_row("SELECT COUNT(*) FROM timelines", [], |r| r.get(0))
+            .unwrap_or(0);
+
+        // If the in-memory project timeline has no tracks and there are already domain timelines in the DB,
+        // do not overwrite or create an empty duplicate timeline.
+        if tl.tracks.is_empty() && existing.is_none() && total_timelines > 0 {
+            return Ok(());
+        }
+
+        let now: String = tx
+            .query_row("SELECT datetime('now')", [], |r| r.get(0))
+            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+
+        if let Some((name, width, height, _created_at)) = existing {
+            tx.execute(
+                "UPDATE timelines SET name = ?2, fps_num = ?3, fps_den = ?4, width = ?5, height = ?6, duration_frames = ?7, updated_at = ?8 WHERE id = ?1",
+                params![tl_id_str, name, tl.timebase.num, tl.timebase.den, width, height, tl.duration_pts, now],
+            )
+            .map_err(sql_err)?;
+        } else if !tl.tracks.is_empty() {
+            tx.execute(
+                "INSERT INTO timelines (id, name, fps_num, fps_den, width, height, duration_frames, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![tl_id_str, "Timeline 1", tl.timebase.num, tl.timebase.den, 1920u32, 1080u32, tl.duration_pts, now, now],
+            )
+            .map_err(sql_err)?;
+        } else {
+            return Ok(());
+        }
+
+        if !tl.tracks.is_empty() {
+            for (ti, track) in tl.tracks.iter().enumerate() {
+                let track_id_str = track.id.to_string();
+                let t_type = match track.kind {
+                    TrackKind::Audio => "Audio",
+                    _ => "Video",
+                };
+                let existing_track: Option<(String, i32, i32)> = tx
+                    .query_row(
+                        "SELECT name, is_muted, is_locked FROM tracks WHERE id = ?1 LIMIT 1",
+                        [&track_id_str],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )
+                    .optional()
+                    .map_err(sql_err)?;
+
+                let (t_name, muted, locked) = existing_track.unwrap_or_else(|| {
+                    (format!("{} {}", t_type, ti + 1), 0, 0)
+                });
+
+                tx.execute(
+                    "INSERT OR REPLACE INTO tracks (id, timeline_id, name, track_type, order_index, is_muted, is_locked)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![track_id_str, tl_id_str, t_name, t_type, ti as i32, muted, locked],
+                )
+                .map_err(sql_err)?;
+
+                tx.execute("DELETE FROM timeline_clips WHERE track_id = ?1", [&track_id_str])
+                    .map_err(sql_err)?;
+
+                for c in &track.clips {
+                    tx.execute(
+                        "INSERT INTO timeline_clips (id, track_id, asset_id, timeline_start_frame, in_frame, out_frame, speed)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1.0)",
+                        params![
+                            c.id.to_string(),
+                            track_id_str,
+                            c.source_id.to_string(),
+                            c.timeline_in,
+                            c.source_in,
+                            c.source_out,
+                        ],
+                    )
+                    .map_err(sql_err)?;
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // Legacy / SCHEMA_V1 format: timelines(id, timebase_num, timebase_den, duration_pts)
     // Cascades remove tracks and clips.
     tx.execute("DELETE FROM timelines", []).map_err(sql_err)?;
     tx.execute(
@@ -572,70 +768,174 @@ fn load_sqlite(file_path: &str) -> Result<Project, String> {
     ensure_schema(&conn)?;
     let decode = |e: rusqlite::Error| format!("Falha ao decodificar projeto corrompido: {}", e);
 
-    let meta = |key: &str| -> Result<Option<String>, String> {
-        conn.query_row("SELECT value FROM project_meta WHERE key = ?1", [key], |r| r.get(0))
-            .optional()
-            .map_err(decode)
-    };
-    let id = meta("id")?.ok_or("Falha ao decodificar projeto corrompido: id ausente")?;
-    let name = meta("name")?.ok_or("Falha ao decodificar projeto corrompido: nome ausente")?;
-    let project_path = meta("project_path")?.unwrap_or_default();
-    let stored_file_path = meta("file_path")?.unwrap_or_default();
-
-    // Timeline (exactly one per project for now).
-    let (tl_id, num, den, duration_pts): (String, i32, i32, i64) = conn
-        .query_row(
-            "SELECT id, timebase_num, timebase_den, duration_pts FROM timelines LIMIT 1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
-        .map_err(decode)?;
-    let mut timeline = Timeline {
-        id: parse_uuid(&tl_id, "timeline id").map_err(decode)?,
-        timebase: Rational { num, den },
-        duration_pts,
-        tracks: Vec::new(),
-    };
-
-    let mut tracks_stmt = conn
-        .prepare("SELECT row, id, kind FROM tracks WHERE timeline_id = ?1 ORDER BY position, row")
-        .map_err(decode)?;
-    let mut clips_stmt = conn
-        .prepare(
-            "SELECT id, source_id, source_in, source_out, timeline_in, timeline_out
-             FROM clips WHERE track_row = ?1 ORDER BY position, row",
-        )
-        .map_err(decode)?;
-    let track_rows = tracks_stmt
-        .query_map([&tl_id], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
-        })
-        .map_err(decode)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(decode)?;
-    for (row, tid, kind) in track_rows {
-        let clips = clips_stmt
-            .query_map([row], |r| {
-                let cid: String = r.get(0)?;
-                let sid: String = r.get(1)?;
-                Ok(Clip {
-                    id: parse_uuid(&cid, "clip id")?,
-                    source_id: parse_uuid(&sid, "source id")?,
-                    source_in: r.get(2)?,
-                    source_out: r.get(3)?,
-                    timeline_in: r.get(4)?,
-                    timeline_out: r.get(5)?,
-                })
+    let (id, name, project_path, stored_file_path) = if table_has_column(&conn, "project_meta", "key")? {
+        let meta = |key: &str| -> Result<Option<String>, String> {
+            conn.query_row("SELECT value FROM project_meta WHERE key = ?1", [key], |r| r.get(0))
+                .optional()
+                .map_err(decode)
+        };
+        let id = meta("id")?.ok_or("Falha ao decodificar projeto corrompido: id ausente")?;
+        let name = meta("name")?.ok_or("Falha ao decodificar projeto corrompido: nome ausente")?;
+        let project_path = meta("project_path")?.unwrap_or_default();
+        let stored_file_path = meta("file_path")?.unwrap_or_default();
+        (id, name, project_path, stored_file_path)
+    } else {
+        // ProjectBundle columnar format: (id, name, created_at, updated_at)
+        let row: Option<(String, String)> = conn
+            .query_row("SELECT id, name FROM project_meta LIMIT 1", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
             })
-            .map_err(decode)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .optional()
             .map_err(decode)?;
-        timeline.tracks.push(Track {
-            id: parse_uuid(&tid, "track id").map_err(decode)?,
-            kind: parse_track_kind(&kind).map_err(decode)?,
-            clips,
-        });
-    }
+        let (id, name) = row.ok_or("Falha ao decodificar projeto corrompido: project_meta vazio")?;
+        let proj_dir = Path::new(file_path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        (id, name, proj_dir, file_path.to_string())
+    };
+
+    let timeline = if table_has_column(&conn, "timelines", "fps_num")? {
+        // Domain timeline schema (db::timeline)
+        let tl_opt: Option<(String, i32, i32, i64)> = conn
+            .query_row(
+                "SELECT id, fps_num, fps_den, duration_frames FROM timelines ORDER BY created_at ASC, id ASC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()
+            .map_err(decode)?;
+
+        if let Some((tl_id, num, den, duration_frames)) = tl_opt {
+            let mut timeline = Timeline {
+                id: parse_uuid(&tl_id, "timeline id").unwrap_or_else(|_| Uuid::new_v4()),
+                timebase: Rational {
+                    num: if num > 0 { num } else { 60 },
+                    den: if den > 0 { den } else { 1 },
+                },
+                duration_pts: duration_frames,
+                tracks: Vec::new(),
+            };
+
+            let mut tracks_stmt = conn
+                .prepare("SELECT id, track_type FROM tracks WHERE timeline_id = ?1 ORDER BY order_index ASC, id ASC")
+                .map_err(decode)?;
+            let mut clips_stmt = conn
+                .prepare(
+                    "SELECT id, asset_id, in_frame, out_frame, timeline_start_frame
+                     FROM timeline_clips WHERE track_id = ?1 ORDER BY timeline_start_frame ASC, id ASC",
+                )
+                .map_err(decode)?;
+
+            let track_rows = tracks_stmt
+                .query_map([&tl_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(decode)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(decode)?;
+
+            let mut max_out = duration_frames;
+            for (tid, kind_str) in track_rows {
+                let clips = clips_stmt
+                    .query_map([&tid], |r| {
+                        let cid: String = r.get(0)?;
+                        let sid: String = r.get(1)?;
+                        let s_in: i64 = r.get(2)?;
+                        let s_out: i64 = r.get(3)?;
+                        let t_in: i64 = r.get(4)?;
+                        let t_out = t_in.saturating_add(s_out.saturating_sub(s_in));
+                        Ok(Clip {
+                            id: parse_uuid(&cid, "clip id").unwrap_or_else(|_| Uuid::new_v4()),
+                            source_id: parse_uuid(&sid, "source id").unwrap_or_else(|_| Uuid::new_v4()),
+                            source_in: s_in,
+                            source_out: s_out,
+                            timeline_in: t_in,
+                            timeline_out: t_out,
+                        })
+                    })
+                    .map_err(decode)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(decode)?;
+
+                for c in &clips {
+                    if c.timeline_out > max_out {
+                        max_out = c.timeline_out;
+                    }
+                }
+
+                timeline.tracks.push(Track {
+                    id: parse_uuid(&tid, "track id").unwrap_or_else(|_| Uuid::new_v4()),
+                    kind: parse_track_kind(&kind_str).unwrap_or(TrackKind::Video),
+                    clips,
+                });
+            }
+            timeline.duration_pts = max_out;
+            timeline
+        } else {
+            Timeline::new(Rational { num: 60, den: 1 })
+        }
+    } else {
+        // Legacy / SCHEMA_V1 format
+        let tl_opt: Option<(String, i32, i32, i64)> = conn
+            .query_row(
+                "SELECT id, timebase_num, timebase_den, duration_pts FROM timelines LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()
+            .map_err(decode)?;
+
+        if let Some((tl_id, num, den, duration_pts)) = tl_opt {
+            let mut timeline = Timeline {
+                id: parse_uuid(&tl_id, "timeline id").map_err(decode)?,
+                timebase: Rational { num, den },
+                duration_pts,
+                tracks: Vec::new(),
+            };
+
+            let mut tracks_stmt = conn
+                .prepare("SELECT row, id, kind FROM tracks WHERE timeline_id = ?1 ORDER BY position, row")
+                .map_err(decode)?;
+            let mut clips_stmt = conn
+                .prepare(
+                    "SELECT id, source_id, source_in, source_out, timeline_in, timeline_out
+                     FROM clips WHERE track_row = ?1 ORDER BY position, row",
+                )
+                .map_err(decode)?;
+            let track_rows = tracks_stmt
+                .query_map([&tl_id], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                })
+                .map_err(decode)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(decode)?;
+            for (row, tid, kind) in track_rows {
+                let clips = clips_stmt
+                    .query_map([row], |r| {
+                        let cid: String = r.get(0)?;
+                        let sid: String = r.get(1)?;
+                        Ok(Clip {
+                            id: parse_uuid(&cid, "clip id")?,
+                            source_id: parse_uuid(&sid, "source id")?,
+                            source_in: r.get(2)?,
+                            source_out: r.get(3)?,
+                            timeline_in: r.get(4)?,
+                            timeline_out: r.get(5)?,
+                        })
+                    })
+                    .map_err(decode)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(decode)?;
+                timeline.tracks.push(Track {
+                    id: parse_uuid(&tid, "track id").map_err(decode)?,
+                    kind: parse_track_kind(&kind).map_err(decode)?,
+                    clips,
+                });
+            }
+            timeline
+        } else {
+            Timeline::new(Rational { num: 60, den: 1 })
+        }
+    };
 
     let mut media_stmt = conn
         .prepare("SELECT * FROM media_assets ORDER BY row")
@@ -804,6 +1104,56 @@ mod tests {
             .unwrap();
         let err = Project::load(&p.file_path).unwrap_err();
         assert!(err.contains("versão mais nova"), "{}", err);
+    }
+
+    #[test]
+    fn project_bundle_and_domain_timeline_compatibility() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("testando.aether");
+        let bundle = crate::bundle::ProjectBundle::new(&bundle_path);
+        let conn = bundle.open_connection().unwrap();
+
+        let meta = crate::bundle::ProjectMeta {
+            id: Uuid::new_v4().to_string(),
+            name: "Testando Bundle".to_string(),
+            created_at: "2026-10-24T12:00:00Z".to_string(),
+            updated_at: "2026-10-24T12:00:00Z".to_string(),
+        };
+        crate::bundle::ProjectBundle::write_meta(&conn, &meta).unwrap();
+
+        // Initialize domain timeline schema and a default timeline
+        crate::db::timeline::init_timeline_schema(&conn).unwrap();
+        let domain_tl = crate::db::timeline::create_timeline(&conn, "Timeline 1", 60, 1, 1920, 1080).unwrap();
+        drop(conn);
+
+        let db_file_str = bundle.db_path().to_string_lossy().to_string();
+
+        // 1. Load via Project::load using project.db path
+        let mut loaded = Project::load(&db_file_str).expect("Project::load should succeed on ProjectBundle db");
+        assert_eq!(loaded.id, meta.id);
+        assert_eq!(loaded.name, "Testando Bundle");
+        assert_eq!(loaded.timeline.id.to_string(), domain_tl.id);
+        assert_eq!(loaded.timeline.tracks.len(), 2);
+
+        // 2. Add media item and save via Project::save
+        let media = item_with_tech("/Users/test/gravacao_show.m4a");
+        let media_id = loaded.add_media(media);
+        loaded.save().expect("Project::save should succeed on ProjectBundle db");
+
+        // 3. Reload via bundle directory path directly and verify media + timeline + meta preserved
+        let reloaded = Project::load(bundle.root_path().to_str().unwrap())
+            .expect("Project::load should also accept .aether bundle directory path");
+        assert_eq!(reloaded.id, meta.id);
+        assert_eq!(reloaded.name, "Testando Bundle");
+        assert_eq!(reloaded.media_pool.items.len(), 1);
+        assert_eq!(reloaded.media_pool.items[0].id, media_id);
+        assert_eq!(reloaded.timeline.tracks.len(), 2);
+
+        let conn_check = bundle.open_connection().unwrap();
+        let meta_after = crate::bundle::ProjectBundle::read_meta(&conn_check).unwrap().unwrap();
+        assert_eq!(meta_after.id, meta.id);
+        assert_eq!(meta_after.name, "Testando Bundle");
+        assert_eq!(meta_after.created_at, meta.created_at);
     }
 }
 
