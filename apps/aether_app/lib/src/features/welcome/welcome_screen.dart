@@ -494,18 +494,32 @@ class WelcomeScreen extends ConsumerWidget {
   }
 
   /// Opens a project bundle from disk, updates active state, and navigates to the editor.
+  String _normalizeBundlePath(String rawPath) {
+    var cleaned = rawPath.trim().replaceAll(RegExp(r'[/\\]+$'), '');
+    if (cleaned.endsWith('project.db') ||
+        cleaned.endsWith('project.db-wal') ||
+        cleaned.endsWith('project.db-shm')) {
+      cleaned = File(cleaned).parent.path;
+    }
+    if (!cleaned.toLowerCase().endsWith('.aether')) {
+      cleaned = '$cleaned.aether';
+    }
+    return cleaned;
+  }
+
   Future<void> _openProjectBundle(
     BuildContext context,
     WidgetRef ref,
     String bundlePath,
   ) async {
     try {
-      var resolvedPath = bundlePath;
-      if (resolvedPath.endsWith('project.db')) {
-        resolvedPath = File(resolvedPath).parent.path;
-      }
+      var resolvedPath = _normalizeBundlePath(bundlePath);
 
       final meta = await openProjectBundle(bundlePath: resolvedPath);
+      final activeBundlePath = await getActiveBundlePath();
+      if (activeBundlePath != null && activeBundlePath.isNotEmpty) {
+        resolvedPath = activeBundlePath;
+      }
       if (!context.mounted) return;
 
       // Registra na lista de projetos recentes
@@ -598,14 +612,16 @@ class WelcomeScreen extends ConsumerWidget {
     const typeGroup = XTypeGroup(
       label: 'Aether Project',
       extensions: ['aether', 'db'],
+      uniformTypeIdentifiers: [
+        'com.aether.project',
+        'com.apple.package',
+        'public.database',
+        'public.data',
+      ],
     );
     final file = await openFile(acceptedTypeGroups: const [typeGroup]);
     if (file == null || !context.mounted) return;
 
-    var bundlePath = file.path;
-    if (bundlePath.endsWith('project.db')) {
-      bundlePath = File(bundlePath).parent.path;
-    }
-    await _openProjectBundle(context, ref, bundlePath);
+    await _openProjectBundle(context, ref, file.path);
   }
 }
