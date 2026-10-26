@@ -173,6 +173,15 @@ class TimelineState {
     );
   }
 
+  /// Returns the number of clips across all tracks referencing [sourceId].
+  int countClipsForSource(UuidValue sourceId) {
+    return tracks.fold<int>(
+      0,
+      (acc, track) =>
+          acc + track.clips.where((c) => c.sourceId == sourceId).length,
+    );
+  }
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -208,6 +217,10 @@ class TimelineNotifier extends StateNotifier<TimelineState> {
     required int sourceOut,
     required int timelineIn,
   })? _addClipToTrackFn;
+  final Future<Timeline> Function({
+    required Timeline timeline,
+    required UuidValue sourceId,
+  })? _removeClipsBySourceFn;
 
   TimelineNotifier({
     Future<Timeline> Function()? createTimelineFn,
@@ -219,10 +232,15 @@ class TimelineNotifier extends StateNotifier<TimelineState> {
       required int sourceOut,
       required int timelineIn,
     })? addClipToTrackFn,
+    Future<Timeline> Function({
+      required Timeline timeline,
+      required UuidValue sourceId,
+    })? removeClipsBySourceFn,
     bool autoInit = true,
     Timeline? initialTimeline,
   })  : _createTimelineFn = createTimelineFn,
         _addClipToTrackFn = addClipToTrackFn,
+        _removeClipsBySourceFn = removeClipsBySourceFn,
         super(initialTimeline != null
             ? TimelineState.fromTimeline(initialTimeline)
             : const TimelineState.initial()) {
@@ -388,6 +406,59 @@ class TimelineNotifier extends StateNotifier<TimelineState> {
         errorMessage: 'Failed to add clip: $e',
       );
     }
+  }
+
+  /// Removes all clips referencing [sourceId] across all tracks and recalculates duration.
+  /// Returns the number of removed clips.
+  Future<int> removeClipsBySource(UuidValue sourceId) async {
+    final removedCount = state.countClipsForSource(sourceId);
+    if (removedCount == 0) return 0;
+
+    final currentTimeline = state.timeline;
+    if (currentTimeline != null && _removeClipsBySourceFn != null) {
+      try {
+        final updated = await _removeClipsBySourceFn(
+          timeline: currentTimeline,
+          sourceId: sourceId,
+        );
+        state = TimelineState.fromTimeline(
+          updated,
+          pixelsPerSecond: state.pixelsPerSecond,
+        );
+        return removedCount;
+      } catch (_) {
+        // Fallback to pure Dart calculation below if FFI dylib is not initialized
+      }
+    }
+
+    final updatedTracks = state.tracks.map((track) {
+      final remaining =
+          track.clips.where((c) => c.sourceId != sourceId).toList();
+      return Track(id: track.id, kind: track.kind, clips: remaining);
+    }).toList();
+
+    final newDurationPts = updatedTracks
+        .expand((t) => t.clips)
+        .fold<int>(0, (max, c) => c.timelineOut > max ? c.timelineOut : max);
+    final newClipCount =
+        updatedTracks.fold<int>(0, (acc, t) => acc + t.clips.length);
+
+    final updatedTimeline = currentTimeline != null
+        ? Timeline(
+            id: currentTimeline.id,
+            timebase: currentTimeline.timebase,
+            durationPts: newDurationPts,
+            tracks: updatedTracks,
+          )
+        : null;
+
+    state = state.copyWith(
+      timeline: updatedTimeline,
+      tracks: updatedTracks,
+      durationPts: newDurationPts,
+      totalClipCount: newClipCount,
+    );
+    return removedCount;
   }
 }
 

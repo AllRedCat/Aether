@@ -8,6 +8,7 @@ import '../../bridge/api.dart';
 import '../../services/file_picker_service.dart';
 import '../timeline/active_timeline_provider.dart';
 import '../timeline/timeline_provider.dart';
+import '../timeline/timeline_selection_provider.dart';
 import '../../core/providers/project_provider.dart';
 
 /// Immutable state representation for the Media Pool catalog.
@@ -133,6 +134,11 @@ typedef GetMediaItemsFn = Future<List<MediaItem>> Function({
   required String projectPath,
 });
 
+typedef RemoveMediaFn = Future<bool> Function({
+  String? projectPath,
+  required UuidValue mediaId,
+});
+
 typedef SubscribeImportProgressFn = Stream<ImportProgress> Function();
 
 typedef StartMediaAnalysisStreamFn = Stream<MediaAnalysisProgress> Function({
@@ -147,9 +153,11 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
   final FilePickerService _filePickerService;
   final ImportMediaFn? _importMediaFn;
   final GetMediaItemsFn? _getMediaItemsFn;
+  final RemoveMediaFn? _removeMediaFn;
   final SubscribeImportProgressFn? _subscribeProgressFn;
   final StartMediaAnalysisStreamFn? _startAnalysisStreamFn;
   final void Function(MediaItem item)? _onAddToTimeline;
+  final FutureOr<void> Function(UuidValue mediaId)? _onRemoveFromTimeline;
   final String? projectPath;
   StreamSubscription<ImportProgress>? _progressSubscription;
   final Map<String, StreamSubscription<MediaAnalysisProgress>>
@@ -160,9 +168,11 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
     FilePickerService? filePickerService,
     ImportMediaFn? importMediaFn,
     GetMediaItemsFn? getMediaItemsFn,
+    RemoveMediaFn? removeMediaFn,
     SubscribeImportProgressFn? subscribeProgressFn,
     StartMediaAnalysisStreamFn? startAnalysisStreamFn,
     void Function(MediaItem item)? onAddToTimeline,
+    FutureOr<void> Function(UuidValue mediaId)? onRemoveFromTimeline,
     this.projectPath,
     bool autoLoad = false,
     List<MediaItem>? initialItems,
@@ -170,9 +180,11 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
             filePickerService ?? const FileSelectorPickerService(),
         _importMediaFn = importMediaFn,
         _getMediaItemsFn = getMediaItemsFn,
+        _removeMediaFn = removeMediaFn,
         _subscribeProgressFn = subscribeProgressFn,
         _startAnalysisStreamFn = startAnalysisStreamFn,
         _onAddToTimeline = onAddToTimeline,
+        _onRemoveFromTimeline = onRemoveFromTimeline,
         super(initialItems != null
             ? MediaPoolState(items: initialItems)
             : const MediaPoolState.initial()) {
@@ -366,7 +378,7 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
     }
   }
 
-  void removeItem(UuidValue id) {
+  Future<void> removeItem(UuidValue id) async {
     _analysisSubscriptions[id.uuid]?.cancel();
     _analysisSubscriptions.remove(id.uuid);
     _lastProgressUpdate.remove('ana_${id.uuid}');
@@ -385,6 +397,20 @@ class MediaPoolNotifier extends StateNotifier<MediaPoolState> {
       indexingProgress: updatedProgress,
       analysisProgress: updatedAnalysis,
     );
+
+    final removeTimelineCb = _onRemoveFromTimeline;
+    if (removeTimelineCb != null) {
+      await removeTimelineCb(id);
+    }
+
+    final removeFn = _removeMediaFn;
+    if (removeFn != null) {
+      try {
+        await removeFn(projectPath: projectPath, mediaId: id);
+      } catch (e) {
+        debugPrint('[MediaPool] Erro ao remover mídia do banco: $e');
+      }
+    }
   }
 
   void addMediaToTimeline(MediaItem item) {
@@ -415,11 +441,39 @@ final mediaPoolProvider =
     filePickerService: filePicker,
     importMediaFn: importMediaFile,
     getMediaItemsFn: getMediaItems,
+    removeMediaFn: removeMediaFile,
     subscribeProgressFn: subscribeImportProgress,
     startAnalysisStreamFn: startMediaAnalysisStream,
     // Rust's Project::load expects the .aether FILE path, not the folder.
     projectPath: project?.filePath,
     initialItems: project?.mediaPool.items,
+    onRemoveFromTimeline: (mediaId) async {
+      final selection = ref.read(timelineSelectionProvider);
+      if (selection.hasSelection && selection.selectedClipId != null) {
+        final selectedClipId = selection.selectedClipId!;
+        final isSelectedClipFromMedia = ref
+            .read(timelineProvider)
+            .tracks
+            .expand((t) => t.clips)
+            .any((c) => c.id == selectedClipId && c.sourceId == mediaId);
+        if (isSelectedClipFromMedia) {
+          ref.read(timelineSelectionProvider.notifier).clearSelection();
+        }
+      }
+
+      final timelineNotifier = ref.read(timelineProvider.notifier);
+      await timelineNotifier.removeClipsBySource(mediaId);
+
+      final activeTl = ref.read(activeTimelineProvider).valueOrNull;
+      if (activeTl != null &&
+          activeTl.clips.any((c) => c.assetId == mediaId.uuid)) {
+        try {
+          await ref
+              .read(activeTimelineProvider.notifier)
+              .loadTimeline(activeTl.timeline.id);
+        } catch (_) {}
+      }
+    },
     onAddToTimeline: (mediaItem) async {
       final timelineNotifier = ref.read(timelineProvider.notifier);
 
