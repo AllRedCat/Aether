@@ -3,7 +3,100 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../bridge/api.dart';
 import '../../theme/catppuccin.dart';
+import '../timeline/active_timeline_provider.dart';
+import '../timeline/timeline_provider.dart';
 import 'media_pool_provider.dart';
+
+/// Prompts the user for confirmation if [item] is currently referenced by clips
+/// on the timeline; otherwise removes [item] from the Media Pool immediately.
+Future<void> confirmAndRemoveMediaItem(
+  BuildContext context,
+  WidgetRef ref,
+  MediaItem item,
+) async {
+  final timelineClipsCount =
+      ref.read(timelineProvider).countClipsForSource(item.id);
+  final activeTlClipsCount = ref
+          .read(activeTimelineProvider)
+          .valueOrNull
+          ?.clips
+          .where((c) => c.assetId == item.id.uuid)
+          .length ??
+      0;
+  final usedClipCount = timelineClipsCount > activeTlClipsCount
+      ? timelineClipsCount
+      : activeTlClipsCount;
+
+  if (usedClipCount > 0) {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          key: const Key('remove_media_confirm_dialog'),
+          backgroundColor: CatppuccinMocha.mantle,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: const BorderSide(color: CatppuccinMocha.surface0),
+          ),
+          title: const Row(
+            children: [
+              Icon(
+                Icons.warning_amber_rounded,
+                color: CatppuccinMocha.yellow,
+                size: 20,
+              ),
+              SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Remover mídia em uso?',
+                  style: TextStyle(
+                    color: CatppuccinMocha.text,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'A mídia "${item.fileName}" está sendo usada em $usedClipCount '
+            '${usedClipCount == 1 ? 'clipe' : 'clipes'} na Timeline. '
+            'Removê-la do Media Pool também removerá '
+            '${usedClipCount == 1 ? 'esse clipe' : 'esses clipes'} da Timeline.',
+            style: const TextStyle(
+              color: CatppuccinMocha.subtext0,
+              fontSize: 13,
+            ),
+          ),
+          actions: [
+            TextButton(
+              key: const Key('cancel_remove_media_button'),
+              style: TextButton.styleFrom(
+                foregroundColor: CatppuccinMocha.subtext1,
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              key: const Key('confirm_remove_media_button'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: CatppuccinMocha.red,
+                foregroundColor: CatppuccinMocha.base,
+                elevation: 0,
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Remover'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+  }
+
+  await ref.read(mediaPoolProvider.notifier).removeItem(item.id);
+}
 
 /// Formatter and styling helpers for media assets.
 class MediaFormatter {
@@ -196,7 +289,7 @@ class MediaPoolView extends ConsumerWidget {
           Expanded(
             child: state.items.isEmpty && !state.isLoading
                 ? _buildEmptyState(context, notifier)
-                : _buildMediaList(context, state, notifier),
+                : _buildMediaList(context, ref, state, notifier),
           ),
         ],
       ),
@@ -343,6 +436,7 @@ class MediaPoolView extends ConsumerWidget {
 
   Widget _buildMediaList(
     BuildContext context,
+    WidgetRef ref,
     MediaPoolState state,
     MediaPoolNotifier notifier,
   ) {
@@ -358,6 +452,7 @@ class MediaPoolView extends ConsumerWidget {
 
         return _buildMediaItemCard(
           context,
+          ref,
           item,
           isSelected,
           notifier,
@@ -370,6 +465,7 @@ class MediaPoolView extends ConsumerWidget {
 
   Widget _buildMediaItemCard(
     BuildContext context,
+    WidgetRef ref,
     MediaItem item,
     bool isSelected,
     MediaPoolNotifier notifier, {
@@ -570,7 +666,24 @@ class MediaPoolView extends ConsumerWidget {
                     visualDensity: VisualDensity.compact,
                     padding: EdgeInsets.zero,
                     constraints:
-                        const BoxConstraints(minWidth: 32, minHeight: 32),
+                        const BoxConstraints(minWidth: 28, minHeight: 28),
+                  ),
+
+                  // Remove from Media Pool Button
+                  IconButton(
+                    key: Key('remove_media_${item.id}'),
+                    tooltip: 'Remover do Media Pool',
+                    icon: const Icon(
+                      Icons.delete_outline_rounded,
+                      size: 18,
+                      color: CatppuccinMocha.red,
+                    ),
+                    onPressed: () =>
+                        confirmAndRemoveMediaItem(context, ref, item),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 28, minHeight: 28),
                   ),
                 ],
               ),

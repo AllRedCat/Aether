@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../bridge/api.dart';
 import '../../../theme/catppuccin.dart';
@@ -7,7 +8,7 @@ import '../../media_pool/media_pool_view.dart';
 /// Inspector view displayed when a media item is selected in the Media Pool
 /// but no clip is selected in the Timeline. Shows detailed metadata about
 /// the source media file (resolution, codec, duration, sample rate, etc.).
-class MediaItemPropertiesView extends StatelessWidget {
+class MediaItemPropertiesView extends ConsumerWidget {
   final MediaItem mediaItem;
 
   const MediaItemPropertiesView({
@@ -16,7 +17,7 @@ class MediaItemPropertiesView extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final meta = mediaItem.metadata;
     final typeColor = MediaFormatter.typeColor(mediaItem.mediaType);
     final typeIcon = MediaFormatter.typeIcon(mediaItem.mediaType);
@@ -234,6 +235,34 @@ class MediaItemPropertiesView extends StatelessWidget {
               ),
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // Remove Media Action Button
+          OutlinedButton.icon(
+            key: const Key('inspector_remove_media_button'),
+            onPressed: () =>
+                confirmAndRemoveMediaItem(context, ref, mediaItem),
+            icon: const Icon(Icons.delete_outline_rounded, size: 16),
+            label: const Text(
+              'Remover do Media Pool',
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: CatppuccinMocha.red,
+              side: BorderSide(
+                color: CatppuccinMocha.red.withValues(alpha: 0.6),
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
             ),
           ),
         ],
