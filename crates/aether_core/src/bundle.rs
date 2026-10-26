@@ -37,22 +37,43 @@ pub struct ProjectBundle {
 impl ProjectBundle {
     /// Creates a new `ProjectBundle` from the given path.
     ///
-    /// - If `path` points to `project.db`, climbs one level (`parent()`) to obtain the bundle root.
+    /// - Normalizes trailing slashes and redundant path components.
+    /// - If `path` is inside an existing `<name>.aether` ancestor (e.g. `project.db`,
+    ///   `project.db-wal`, `cache/`), resolves directly to that `.aether` root.
+    /// - If `path` points to `project.db*`, climbs one level (`parent()`) to obtain the bundle root.
     /// - Ensures that the root directory always has the `.aether` extension.
     pub fn new(path: impl AsRef<Path>) -> Self {
-        let path = path.as_ref();
+        let normalized: PathBuf = path.as_ref().components().collect();
 
-        // 1. If path points to `project.db`, climb one level to get bundle root
-        let mut root = if path.file_name().map_or(false, |name| name == "project.db") {
-            match path.parent() {
+        // 1. If normalized path or any ancestor already has the `.aether` extension, use that ancestor
+        if let Some(aether_ancestor) = normalized.ancestors().find(|ancestor| {
+            ancestor
+                .extension()
+                .map_or(false, |ext| ext.eq_ignore_ascii_case("aether"))
+        }) {
+            return Self {
+                root_path: aether_ancestor.to_path_buf(),
+            };
+        }
+
+        // 2. If path points to `project.db` (or WAL/SHM sidecars), climb one level to get bundle root
+        let is_project_db_file = normalized
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map_or(false, |name| {
+                name == "project.db" || name == "project.db-wal" || name == "project.db-shm"
+            });
+
+        let mut root = if is_project_db_file {
+            match normalized.parent() {
                 Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
                 _ => PathBuf::from("project"),
             }
         } else {
-            path.to_path_buf()
+            normalized
         };
 
-        // 2. Ensure root directory always has `.aether` extension
+        // 3. Ensure root directory always has `.aether` extension
         if !root
             .extension()
             .map_or(false, |ext| ext.eq_ignore_ascii_case("aether"))
@@ -251,6 +272,16 @@ mod tests {
         // 7. Path with other extension
         let b7 = ProjectBundle::new("/home/user/MyProject.bundle");
         assert_eq!(b7.root_path(), Path::new("/home/user/MyProject.aether"));
+
+        // 8. Path with trailing slash
+        let b8 = ProjectBundle::new("/home/user/MyProject.aether/");
+        assert_eq!(b8.root_path(), Path::new("/home/user/MyProject.aether"));
+
+        // 9. Path pointing to SQLite WAL/SHM sidecar or cache inside a .aether bundle
+        let b9 = ProjectBundle::new("/home/user/MyProject.aether/project.db-wal");
+        assert_eq!(b9.root_path(), Path::new("/home/user/MyProject.aether"));
+        let b10 = ProjectBundle::new("/home/user/MyProject.aether/cache/index");
+        assert_eq!(b10.root_path(), Path::new("/home/user/MyProject.aether"));
     }
 
     #[test]
