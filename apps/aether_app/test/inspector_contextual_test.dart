@@ -435,5 +435,52 @@ void main() {
       expect(find.byType(AudioPropertiesView), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets('11. Selecting a Media Pool item shows MediaItemPropertiesView with remove button and removes item',
+        (WidgetTester tester) async {
+      final unusedMediaId = UuidValue.fromString('m0000000-0000-0000-0000-000000000099');
+      final unusedMedia = MediaItem(
+        id: unusedMediaId,
+        filePath: '/media/broll.mp4',
+        fileName: 'broll.mp4',
+        mediaType: MediaType.video,
+        metadata: const MediaMetadata(
+          durationPts: 300,
+          durationSeconds: 5.0,
+          fileSizeBytes: 102400,
+        ),
+      );
+
+      await tester.pumpWidget(
+        buildTestInspectorApp(
+          mediaItems: [...testMediaItems, unusedMedia],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final element = tester.element(find.byType(InspectorView));
+      final container = ProviderScope.containerOf(element);
+
+      // Select unused media item in Media Pool
+      container.read(mediaPoolProvider.notifier).selectItem(unusedMediaId);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('media_item_properties_view')), findsOneWidget);
+      expect(find.text('broll.mp4'), findsOneWidget);
+      final removeBtn = find.byKey(const Key('inspector_remove_media_button'));
+      expect(removeBtn, findsOneWidget);
+
+      await tester.ensureVisible(removeBtn);
+      await tester.tap(removeBtn);
+      await tester.pumpAndSettle();
+
+      // Media item removed and Inspector transitions back to SequencePropertiesView
+      expect(
+        container.read(mediaPoolProvider).items.any((i) => i.id == unusedMediaId),
+        isFalse,
+      );
+      expect(container.read(mediaPoolProvider).selectedItemId, isNull);
+      expect(find.byType(SequencePropertiesView), findsOneWidget);
+    });
   });
 }

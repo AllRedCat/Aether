@@ -183,6 +183,34 @@ void main() {
       expect(notifier.state.selectedItemId, isNull);
     });
 
+    test('removeItem invokes removeMediaFn and onRemoveFromTimeline', () async {
+      UuidValue? removedFromDbId;
+      String? removedProjectPath;
+      UuidValue? removedFromTimelineId;
+
+      final notifier = MediaPoolNotifier(
+        filePickerService: MockFilePickerService([]),
+        projectPath: '/tmp/test.aether',
+        removeMediaFn: ({projectPath, required mediaId}) async {
+          removedProjectPath = projectPath;
+          removedFromDbId = mediaId;
+          return true;
+        },
+        onRemoveFromTimeline: (mediaId) {
+          removedFromTimelineId = mediaId;
+        },
+        initialItems: [sampleVideo, sampleAudio],
+      );
+
+      await notifier.removeItem(sampleVideo.id);
+
+      expect(notifier.state.items.length, 1);
+      expect(notifier.state.items.first.id, sampleAudio.id);
+      expect(removedProjectPath, '/tmp/test.aether');
+      expect(removedFromDbId, sampleVideo.id);
+      expect(removedFromTimelineId, sampleVideo.id);
+    });
+
     test('deduplicates existing media by file path on import', () async {
       final mockPicker = MockFilePickerService(['/videos/sample.mp4']);
       final notifier = MediaPoolNotifier(
@@ -443,6 +471,109 @@ void main() {
       expect(find.byKey(const Key('media_pool_indexing_banner')), findsNothing);
       expect(find.byKey(Key('media_item_indexing_${sampleAudio.id}')),
           findsNothing);
+    });
+
+    testWidgets(
+        'Test 6: Tapping remove button on unused media item removes it immediately without confirmation dialog',
+        (tester) async {
+      final mediaNotifier = MediaPoolNotifier(
+        filePickerService: MockFilePickerService([]),
+        initialItems: [sampleVideo, sampleAudio],
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            mediaPoolProvider.overrideWith((ref) => mediaNotifier),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(body: MediaPoolView()),
+          ),
+        ),
+      );
+
+      expect(find.text('sample.mp4'), findsOneWidget);
+      expect(find.text('music.wav'), findsOneWidget);
+
+      await tester.tap(find.byKey(Key('remove_media_${sampleVideo.id}')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('remove_media_confirm_dialog')), findsNothing);
+      expect(find.text('sample.mp4'), findsNothing);
+      expect(find.text('music.wav'), findsOneWidget);
+      expect(mediaNotifier.state.items.length, 1);
+    });
+
+    testWidgets(
+        'Test 7: Tapping remove button on media used in timeline shows confirmation dialog and cascades removal on confirm',
+        (tester) async {
+      final trackId = uuid.v4obj();
+      final clipOnTimeline = Clip(
+        id: uuid.v4obj(),
+        sourceId: sampleVideo.id,
+        sourceIn: 0,
+        sourceOut: 900,
+        timelineIn: 0,
+        timelineOut: 900,
+      );
+      final initialTimeline = Timeline(
+        id: uuid.v4obj(),
+        timebase: const Rational(num: 60, den: 1),
+        durationPts: 900,
+        tracks: [
+          Track(id: trackId, kind: TrackKind.video, clips: [clipOnTimeline]),
+        ],
+      );
+      final timelineNotifier = MockTimelineNotifier(
+        TimelineState.fromTimeline(initialTimeline),
+      );
+
+      final mediaNotifier = MediaPoolNotifier(
+        filePickerService: MockFilePickerService([]),
+        initialItems: [sampleVideo],
+        onRemoveFromTimeline: (mediaId) async {
+          await timelineNotifier.removeClipsBySource(mediaId);
+        },
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            timelineProvider.overrideWith((ref) => timelineNotifier),
+            mediaPoolProvider.overrideWith((ref) => mediaNotifier),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(body: MediaPoolView()),
+          ),
+        ),
+      );
+
+      // 1. Tap remove -> dialog appears
+      await tester.tap(find.byKey(Key('remove_media_${sampleVideo.id}')));
+      await tester.pumpAndSettle();
+
+      expect(
+          find.byKey(const Key('remove_media_confirm_dialog')), findsOneWidget);
+      expect(find.textContaining('1 clipe na Timeline'), findsOneWidget);
+
+      // 2. Tap Cancelar -> item and timeline clip remain intact
+      await tester.tap(find.byKey(const Key('cancel_remove_media_button')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('remove_media_confirm_dialog')), findsNothing);
+      expect(mediaNotifier.state.items.length, 1);
+      expect(timelineNotifier.state.totalClipCount, 1);
+
+      // 3. Tap remove again and confirm -> both media item and timeline clip are removed
+      await tester.tap(find.byKey(Key('remove_media_${sampleVideo.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm_remove_media_button')));
+      await tester.pumpAndSettle();
+
+      expect(mediaNotifier.state.items, isEmpty);
+      expect(timelineNotifier.state.totalClipCount, 0);
+      expect(timelineNotifier.state.durationPts, 0);
+      expect(find.byKey(const Key('media_pool_empty_state')), findsOneWidget);
     });
   });
 }
