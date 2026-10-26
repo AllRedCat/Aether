@@ -215,6 +215,21 @@ impl Timeline {
     pub fn total_clip_count(&self) -> usize {
         self.tracks.iter().map(|t| t.clips.len()).sum()
     }
+
+    /// Removes all clips referencing `source_id` across all tracks and recalculates duration.
+    /// Returns the total number of clips removed.
+    pub fn remove_clips_by_source(&mut self, source_id: Uuid) -> usize {
+        let mut removed = 0;
+        for track in &mut self.tracks {
+            let before = track.clips.len();
+            track.clips.retain(|c| c.source_id != source_id);
+            removed += before - track.clips.len();
+        }
+        if removed > 0 {
+            self.recalculate_duration();
+        }
+        removed
+    }
 }
 
 #[cfg(test)]
@@ -404,6 +419,45 @@ mod tests {
         );
         timeline.tracks[0].add_clip(negative_clip);
         timeline.recalculate_duration();
+        assert_eq!(timeline.duration_pts, 0);
+    }
+
+    #[test]
+    fn test_remove_clips_by_source_recalculates_duration() {
+        let mut timeline = Timeline::new(Rational { num: 60, den: 1 });
+        let v1 = timeline.add_track(TrackKind::Video);
+        let a1 = timeline.add_track(TrackKind::Audio);
+
+        let source_a = Uuid::new_v4();
+        let source_b = Uuid::new_v4();
+
+        timeline
+            .add_clip(v1, Clip::new(source_a, 0, 100, 0))
+            .unwrap();
+        timeline
+            .add_clip(v1, Clip::new(source_b, 0, 150, 100))
+            .unwrap();
+        timeline
+            .add_clip(a1, Clip::new(source_a, 0, 300, 50))
+            .unwrap();
+
+        assert_eq!(timeline.total_clip_count(), 3);
+        assert_eq!(timeline.duration_pts, 350);
+
+        let removed = timeline.remove_clips_by_source(source_a);
+        assert_eq!(removed, 2);
+        assert_eq!(timeline.total_clip_count(), 1);
+        assert_eq!(timeline.duration_pts, 250);
+        assert_eq!(timeline.tracks[0].clips[0].source_id, source_b);
+        assert!(timeline.tracks[1].clips.is_empty());
+
+        let removed_again = timeline.remove_clips_by_source(source_a);
+        assert_eq!(removed_again, 0);
+        assert_eq!(timeline.duration_pts, 250);
+
+        let removed_b = timeline.remove_clips_by_source(source_b);
+        assert_eq!(removed_b, 1);
+        assert_eq!(timeline.total_clip_count(), 0);
         assert_eq!(timeline.duration_pts, 0);
     }
 }

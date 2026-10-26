@@ -378,13 +378,55 @@ pub fn update_media(file_path: &str, item: &MediaItem) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Removes a media item by id. Returns the number of removed rows.
+/// Removes a media item by id and cascades removal to any timeline clips referencing it.
+/// Returns the number of removed media rows.
 pub fn delete_media(file_path: &str, media_id: Uuid) -> Result<usize, String> {
     ensure_sqlite(file_path)?;
-    let conn = open_connection(file_path, false)?;
+    let mut conn = open_connection(file_path, false)?;
     ensure_schema(&conn)?;
-    conn.execute("DELETE FROM media_assets WHERE id = ?1", [media_id.to_string()])
-        .map_err(sql_err)
+    let tx = conn.transaction().map_err(sql_err)?;
+    let id_str = media_id.to_string();
+
+    let removed = tx
+        .execute("DELETE FROM media_assets WHERE id = ?1", [&id_str])
+        .map_err(sql_err)?;
+
+    if table_has_column(&tx, "timeline_clips", "asset_id")? {
+        tx.execute("DELETE FROM timeline_clips WHERE asset_id = ?1", [&id_str])
+            .map_err(sql_err)?;
+        if table_has_column(&tx, "timelines", "duration_frames")? {
+            tx.execute(
+                "UPDATE timelines SET duration_frames = COALESCE((
+                    SELECT MAX(c.timeline_start_frame + (c.out_frame - c.in_frame))
+                    FROM timeline_clips c
+                    JOIN tracks t ON c.track_id = t.id
+                    WHERE t.timeline_id = timelines.id
+                ), 0)",
+                [],
+            )
+            .map_err(sql_err)?;
+        }
+    }
+
+    if table_has_column(&tx, "clips", "source_id")? {
+        tx.execute("DELETE FROM clips WHERE source_id = ?1", [&id_str])
+            .map_err(sql_err)?;
+        if table_has_column(&tx, "timelines", "duration_pts")? {
+            tx.execute(
+                "UPDATE timelines SET duration_pts = COALESCE((
+                    SELECT MAX(c.timeline_out)
+                    FROM clips c
+                    JOIN tracks t ON c.track_row = t.row
+                    WHERE t.timeline_id = timelines.id
+                ), 0)",
+                [],
+            )
+            .map_err(sql_err)?;
+        }
+    }
+
+    tx.commit().map_err(sql_err)?;
+    Ok(removed)
 }
 
 /// Finds a media item already imported from the same content (hash match).
@@ -1051,6 +1093,30 @@ mod tests {
         assert_eq!(found.metadata.duration_pts, 999);
         assert_eq!(delete_media(&p.file_path, item.id).unwrap(), 1);
         assert!(Project::load(&p.file_path).unwrap().media_pool.is_empty());
+    }
+
+    #[test]
+    fn delete_media_cascades_to_timeline_clips_and_updates_duration() {
+        let (_d, mut p) = tmp_project("Cascade Delete Media");
+        let item_a = item_with_tech("/m/a.mov");
+        let item_b = item_with_tech("/m/b.mov");
+        let id_a = p.add_media(item_a);
+        let id_b = p.add_media(item_b);
+
+        let track = p.timeline.add_track(TrackKind::Video);
+        p.add_clip_from_media(track, id_a, Some(0), Some(120), Some(0)).unwrap();
+        p.add_clip_from_media(track, id_b, Some(0), Some(200), Some(120)).unwrap();
+        p.save().unwrap();
+
+        let removed = delete_media(&p.file_path, id_b).unwrap();
+        assert_eq!(removed, 1);
+
+        let loaded = Project::load(&p.file_path).unwrap();
+        assert_eq!(loaded.media_pool.len(), 1);
+        assert_eq!(loaded.media_pool.items[0].id, id_a);
+        assert_eq!(loaded.timeline.total_clip_count(), 1);
+        assert_eq!(loaded.timeline.duration_pts, 120);
+        assert_eq!(loaded.timeline.tracks[0].clips[0].source_id, id_a);
     }
 
     #[test]
