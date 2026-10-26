@@ -72,6 +72,13 @@ Future<Timeline> addClipToTrack(
         sourceOut: sourceOut,
         timelineIn: timelineIn);
 
+/// Removes all clips referencing `source_id` across all tracks in `timeline`
+/// and recalculates `duration_pts`.
+Future<Timeline> removeClipsBySourceFromTimeline(
+        {required Timeline timeline, required UuidValue sourceId}) =>
+    RustLib.instance.api.crateApiRemoveClipsBySourceFromTimeline(
+        timeline: timeline, sourceId: sourceId);
+
 /// Imports a media asset at `path`, builds its binary temporal frame index (`.fidx`),
 /// triggers non-blocking background generation of `.peak` waveform and `.atlas`
 /// thumbnail caches, and returns [`MediaAssetMetadata`].
@@ -89,6 +96,14 @@ Future<MediaItem> importMediaFile(
         {String? projectPath, required String filePath}) =>
     RustLib.instance.api
         .crateApiImportMediaFile(projectPath: projectPath, filePath: filePath);
+
+/// Removes a media asset from the active project's SQLite database (including cascaded
+/// timeline clips) and in-memory registries (`ASSET_REGISTRY`, `RECENT_IMPORT_PROGRESS`),
+/// while preserving sidecar cache files (`.fidx`, `.peak`, `.atlas`) on disk.
+Future<bool> removeMediaFile(
+        {String? projectPath, required UuidValue mediaId}) =>
+    RustLib.instance.api
+        .crateApiRemoveMediaFile(projectPath: projectPath, mediaId: mediaId);
 
 /// Reads a single Level-of-Detail (`lod`) slice of audio waveform peaks (`min`, `max`, `rms`)
 /// for `asset_id` and `channel` directly from the binary `.peak` / `.aether_peaks` sidecar cache on disk,

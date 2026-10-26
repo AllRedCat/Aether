@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.3.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1624482132;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 239662707;
 
 // Section: executor
 
@@ -1089,6 +1089,78 @@ fn wire__crate__api__preview_seek_seconds_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::preview_seek_seconds(api_session_id, api_seconds)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__remove_clips_by_source_from_timeline_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "remove_clips_by_source_from_timeline",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_timeline = <crate::api::Timeline>::sse_decode(&mut deserializer);
+            let api_source_id = <uuid::Uuid>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::remove_clips_by_source_from_timeline(
+                            api_timeline,
+                            api_source_id,
+                        ))?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__remove_media_file_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "remove_media_file",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_project_path = <Option<String>>::sse_decode(&mut deserializer);
+            let api_media_id = <uuid::Uuid>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::remove_media_file(api_project_path, api_media_id)?;
                     Ok(output_ok)
                 })())
             }
@@ -2453,32 +2525,39 @@ fn pde_ffi_dispatcher_primary_impl(
         28 => wire__crate__api__preview_play_impl(port, ptr, rust_vec_len, data_len),
         29 => wire__crate__api__preview_seek_pts_impl(port, ptr, rust_vec_len, data_len),
         30 => wire__crate__api__preview_seek_seconds_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__save_project_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__set_active_project_file_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__start_media_analysis_stream_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__subscribe_import_progress_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__subscribe_playback_state_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__subscribe_preview_frames_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__timeline_api__create_new_timeline_impl(
+        31 => wire__crate__api__remove_clips_by_source_from_timeline_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        38 => wire__crate__api__timeline_api__create_track_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__timeline_api__delete_timeline_by_id_impl(
+        32 => wire__crate__api__remove_media_file_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__save_project_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__set_active_project_file_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__start_media_analysis_stream_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__subscribe_import_progress_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__subscribe_playback_state_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__subscribe_preview_frames_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__timeline_api__create_new_timeline_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        40 => wire__crate__api__timeline_api__get_project_timelines_impl(
+        40 => wire__crate__api__timeline_api__create_track_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__timeline_api__delete_timeline_by_id_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        41 => wire__crate__api__timeline_api__load_timeline_state_impl(
+        42 => wire__crate__api__timeline_api__get_project_timelines_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        43 => wire__crate__api__timeline_api__load_timeline_state_impl(
             port,
             ptr,
             rust_vec_len,

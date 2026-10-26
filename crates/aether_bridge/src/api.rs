@@ -675,6 +675,16 @@ pub fn add_clip_to_track(
     Ok(timeline)
 }
 
+/// Removes all clips referencing `source_id` across all tracks in `timeline`
+/// and recalculates `duration_pts`.
+pub fn remove_clips_by_source_from_timeline(
+    mut timeline: Timeline,
+    source_id: Uuid,
+) -> Timeline {
+    timeline.remove_clips_by_source(source_id);
+    timeline
+}
+
 // ---------------------------------------------------------
 // MEDIA POOL & CACHE FFI ENDPOINTS
 // ---------------------------------------------------------
@@ -830,6 +840,40 @@ pub fn import_media_file(
 ) -> Result<MediaItem, String> {
     let (item, _meta) = ingest_and_schedule_caches(project_path, file_path)?;
     Ok(item)
+}
+
+/// Removes a media asset from the active project's SQLite database (including cascaded
+/// timeline clips) and in-memory registries (`ASSET_REGISTRY`, `RECENT_IMPORT_PROGRESS`),
+/// while preserving sidecar cache files (`.fidx`, `.peak`, `.atlas`) on disk.
+pub fn remove_media_file(
+    project_path: Option<String>,
+    media_id: Uuid,
+) -> Result<bool, String> {
+    let id_str = media_id.to_string();
+
+    if let Ok(mut reg) = ASSET_REGISTRY.write() {
+        reg.remove(&id_str);
+    }
+    if let Ok(mut recent) = RECENT_IMPORT_PROGRESS.lock() {
+        recent.remove(&id_str);
+    }
+
+    let effective_project_path = project_path
+        .filter(|p| !p.trim().is_empty())
+        .or_else(|| {
+            ACTIVE_PROJECT_FILE
+                .read()
+                .ok()
+                .and_then(|g| g.clone())
+                .filter(|p| Path::new(p).exists())
+        });
+
+    if let Some(proj_path) = effective_project_path {
+        let deleted = aether_core::store::delete_media(&proj_path, media_id)?;
+        return Ok(deleted > 0);
+    }
+
+    Ok(true)
 }
 
 /// Reads a single Level-of-Detail (`lod`) slice of audio waveform peaks (`min`, `max`, `rms`)
@@ -1480,6 +1524,37 @@ mod tests {
             .get(&meta.id)
             .cloned();
         assert!(recorded.is_some());
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn remove_media_file_deletes_from_project_and_preserves_cache() {
+        let tmp_dir = std::env::temp_dir().join(format!("aether_bridge_rm_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let wav_path = tmp_dir.join("tone_rm.wav");
+        write_test_wav(&wav_path, 48_000, 4096);
+
+        let proj = create_project(
+            "RemoveTest".to_string(),
+            tmp_dir.to_string_lossy().to_string(),
+        )
+        .unwrap();
+
+        let imported = import_media_file(
+            Some(proj.file_path.clone()),
+            wav_path.to_string_lossy().to_string(),
+        )
+        .unwrap();
+
+        let items_before = get_media_items(proj.file_path.clone()).unwrap();
+        assert_eq!(items_before.len(), 1);
+
+        let removed = remove_media_file(Some(proj.file_path.clone()), imported.id).unwrap();
+        assert!(removed);
+
+        let items_after = get_media_items(proj.file_path.clone()).unwrap();
+        assert!(items_after.is_empty());
 
         let _ = std::fs::remove_dir_all(&tmp_dir);
     }
