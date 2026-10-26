@@ -166,10 +166,19 @@ class TimelineView extends ConsumerWidget {
                             ),
                             const SizedBox(width: 8),
 
-                            // + Track Button (PopupMenuButton for Video/Audio tracks)
+                            // Track Button (PopupMenuButton for Video/Audio tracks)
                             PopupMenuButton<bool>(
                               key: const Key('add_track_button'),
                               tooltip: 'Adicionar Faixa',
+                              color: CatppuccinMocha.mantle,
+                              elevation: 6,
+                              offset: const Offset(0, 34),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                side: const BorderSide(
+                                  color: CatppuccinMocha.surface1,
+                                ),
+                              ),
                               onSelected: (isVideo) {
                                 ref
                                     .read(activeTimelineProvider.notifier)
@@ -178,76 +187,128 @@ class TimelineView extends ConsumerWidget {
                               itemBuilder: (context) => [
                                 const PopupMenuItem(
                                   value: true,
+                                  height: 36,
                                   child: Row(
                                     children: [
-                                      Icon(Icons.videocam_rounded,
-                                          color: CatppuccinMocha.blue,
-                                          size: 18),
+                                      Icon(
+                                        Icons.videocam_rounded,
+                                        color: CatppuccinMocha.blue,
+                                        size: 16,
+                                      ),
                                       SizedBox(width: 8),
-                                      Text('Faixa de Vídeo'),
+                                      Text(
+                                        'Faixa de Vídeo',
+                                        style: TextStyle(
+                                          color: CatppuccinMocha.text,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
                                     ],
                                   ),
                                 ),
                                 const PopupMenuItem(
                                   value: false,
+                                  height: 36,
                                   child: Row(
                                     children: [
-                                      Icon(Icons.audiotrack_rounded,
-                                          color: CatppuccinMocha.green,
-                                          size: 18),
+                                      Icon(
+                                        Icons.audiotrack_rounded,
+                                        color: CatppuccinMocha.green,
+                                        size: 16,
+                                      ),
                                       SizedBox(width: 8),
-                                      Text('Faixa de Áudio'),
+                                      Text(
+                                        'Faixa de Áudio',
+                                        style: TextStyle(
+                                          color: CatppuccinMocha.text,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
                                     ],
                                   ),
                                 ),
                               ],
                               child: Container(
+                                height: 28,
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 6),
+                                  horizontal: 10,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: CatppuccinMocha.surface0,
+                                  color: CatppuccinMocha.surface0
+                                      .withValues(alpha: 0.75),
                                   borderRadius: BorderRadius.circular(6),
                                   border: Border.all(
-                                      color: CatppuccinMocha.surface1),
+                                    color: CatppuccinMocha.surface1,
+                                  ),
                                 ),
                                 child: const Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.add,
-                                        size: 13,
-                                        color: CatppuccinMocha.text),
-                                    SizedBox(width: 4),
+                                    Icon(
+                                      Icons.add_rounded,
+                                      size: 14,
+                                      color: CatppuccinMocha.blue,
+                                    ),
+                                    SizedBox(width: 5),
                                     Text(
-                                      '+ Track',
+                                      'Track',
                                       style: TextStyle(
                                         color: CatppuccinMocha.text,
                                         fontWeight: FontWeight.w600,
                                         fontSize: 11,
+                                        letterSpacing: 0.2,
                                       ),
+                                    ),
+                                    SizedBox(width: 3),
+                                    Icon(
+                                      Icons.keyboard_arrow_down_rounded,
+                                      size: 13,
+                                      color: CatppuccinMocha.subtext0,
                                     ),
                                   ],
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 8),
+                            const SizedBox(width: 6),
 
-                            // + Timeline Button
-                            OutlinedButton.icon(
-                              key: const Key('create_timeline_button'),
-                              onPressed: () =>
-                                  CreateTimelineDialog.show(context),
-                              icon: const Icon(Icons.add_box_outlined,
-                                  size: 13),
-                              label: const Text('+ Timeline',
-                                  style: TextStyle(fontSize: 11)),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: CatppuccinMocha.text,
-                                side: const BorderSide(
-                                    color: CatppuccinMocha.surface1),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 6),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(6)),
+                            // Timeline Button
+                            SizedBox(
+                              height: 28,
+                              child: OutlinedButton.icon(
+                                key: const Key('create_timeline_button'),
+                                onPressed: () =>
+                                    CreateTimelineDialog.show(context),
+                                icon: const Icon(
+                                  Icons.add_to_queue_rounded,
+                                  size: 13,
+                                  color: CatppuccinMocha.lavender,
+                                ),
+                                label: const Text(
+                                  'Timeline',
+                                  style: TextStyle(
+                                    color: CatppuccinMocha.text,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 11,
+                                    letterSpacing: 0.2,
+                                  ),
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  backgroundColor: CatppuccinMocha.surface0
+                                      .withValues(alpha: 0.4),
+                                  foregroundColor: CatppuccinMocha.text,
+                                  side: const BorderSide(
+                                    color: CatppuccinMocha.surface1,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                ),
                               ),
                             ),
                           ],
